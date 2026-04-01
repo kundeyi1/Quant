@@ -1,0 +1,231 @@
+﻿try:
+    import talib
+except ImportError:
+    talib = None
+import numpy as np
+import pandas as pd
+from core.NumericalOperators import (
+    ts_delay, ts_delta, ts_sum, ts_min, ts_max, 
+    ts_std_dev, ts_corr, ts_cov, ts_rank, cs_rank, sign
+)
+
+class PriceFactors:
+    @staticmethod
+    def overhead_supply(data, window=20):
+        high = data["high"]
+        low = data["low"]
+        close = data["close"]
+        volume = data["volume"]
+        range_hl = (high - low).replace(0, np.nan)
+        supply_weight = (high - close) / range_hl
+        supply_vol = volume * supply_weight
+        sum_supply = supply_vol.rolling(window=window, min_periods=1).sum()
+        sum_total = volume.rolling(window=window, min_periods=1).sum()
+        overhead_supply = sum_supply / sum_total
+        return pd.DataFrame({"overhead_supply": overhead_supply}, index=data.index)
+
+    @staticmethod
+    def price_percentile(data, window=120):
+        percentile = ts_rank(data["close"], window)
+        return pd.DataFrame({"price_percentile": percentile}, index=data.index)
+
+    @staticmethod
+    def price_bias(data, window=20):
+        close = data["close"]
+        ma = close.rolling(window=window).mean()
+        return (close / ma - 1)
+
+class VolumeFactors:
+    @staticmethod
+    def obv(data):
+        close = data["close"].astype("float64").values
+        volume = data["volume"].astype("float64").values
+        obv = talib.OBV(close, volume)
+        return pd.DataFrame({"obv": obv}, index=data.index)
+
+    @staticmethod
+    def volume_bias(data, window=20):
+        volume = data["volume"]
+        ma = volume.rolling(window=window).mean()
+        return (volume / ma - 1)
+
+    @staticmethod
+    def volume_volatility(data, window=60):
+        volume = data["volume"]
+        vol_pct = volume.pct_change()
+        return vol_pct.rolling(window=window).std()
+
+    @staticmethod
+    def volume_breakout(data, window=120, multiplier=1.5):
+        volume = data["volume"]
+        vol_ma = volume.rolling(window=window).mean()
+        vol_std = volume.rolling(window=window).std()
+        signal = (volume > (vol_ma + multiplier * vol_std)).astype(int)
+        return pd.DataFrame({"volume_breakout": signal}, index=data.index)
+
+    @staticmethod
+    def intraday_strength(data):
+        close = data["close"]
+        high = data["high"]
+        volume = data["volume"]
+        ret = close.pct_change()
+        upper_shadow_ratio = (high - close) / close.replace(0, np.nan)
+        vol_ma5 = volume.rolling(window=5).mean()
+        vol_ratio = volume / vol_ma5.replace(0, np.nan)
+        strength = (ret - upper_shadow_ratio) * vol_ratio
+        strength = strength.replace([np.inf, -np.inf], np.nan)
+        return pd.DataFrame({"intraday_strength": strength}, index=data.index)
+
+class TrendFactors:
+    @staticmethod
+    def symmetry(data, window_len=50):
+        highs, lows, closes = data["high"].values, data["low"].values, data["close"].values
+        symmetry = np.full(len(data), np.nan)
+        for i in range(window_len, len(data)):
+            w_high = highs[i-window_len : i]
+            if len(w_high) < 2: continue
+            peak_offset = np.argmax(w_high)
+            peak_idx = i - window_len + peak_offset
+            if peak_idx >= i - 1: continue
+            w_low_after = lows[peak_idx+1 : i]
+            if len(w_low_after) == 0: continue
+            valley_offset = np.argmin(w_low_after)
+            valley_idx = peak_idx + 1 + valley_offset
+            P_peak, P_valley, P_curr = highs[peak_idx], lows[valley_idx], closes[i]
+            dist_pv, dist_pc = valley_idx - peak_idx, i - peak_idx
+            if dist_pv == 0: continue
+            slope_pv, slope_pc = (P_valley - P_peak) / dist_pv, (P_curr - P_peak) / dist_pc
+            if slope_pv == 0: continue
+            symmetry[i] = slope_pc / slope_pv
+        return pd.DataFrame({"symmetry": symmetry}, index=data.index)
+
+    @staticmethod
+    def ma_compression(data, windows=[10, 20, 50]):
+        close = data["close"]
+        mas = [talib.SMA(close.values, timeperiod=w) for w in windows]
+        mas_df = pd.DataFrame(np.array(mas).T, index=data.index)
+        compression = mas_df.std(axis=1) / close
+        return pd.DataFrame({"ma_compression": compression}, index=data.index)
+
+    @staticmethod
+    def yellow_line(data):
+        c = data["close"].values
+        zxt = (talib.SMA(c, 14) + talib.SMA(c, 28) + talib.SMA(c, 57) + talib.SMA(c, 114)) / 4
+        return pd.DataFrame({"yellow_line": zxt}, index=data.index)
+
+    @staticmethod
+    def white_line(data, period=10):
+        c = data["close"].values
+        ema2 = talib.EMA(talib.EMA(c, timeperiod=period), timeperiod=period)
+        return pd.DataFrame({"white_line": ema2}, index=data.index)
+
+    @staticmethod
+    def sma(data, period=14):
+        return pd.DataFrame({"sma": talib.SMA(data["close"].values, timeperiod=period)}, index=data.index)
+
+    @staticmethod
+    def ema(data, period=14):
+        return pd.DataFrame({"ema": talib.EMA(data["close"].values, timeperiod=period)}, index=data.index)
+
+    @staticmethod
+    def wma(data, period=14):
+        return pd.DataFrame({"wma": talib.WMA(data["close"].values, timeperiod=period)}, index=data.index)
+
+    @staticmethod
+    def ma_arrangement(data, windows=[5, 10, 20, 60]):
+        close = data["close"]
+        mas = [talib.SMA(close.values, timeperiod=w) for w in windows]
+        score = sum((mas[i] - mas[i+1]) / mas[i+1] for i in range(len(mas) - 1))
+        return pd.DataFrame({"ma_arrangement": score}, index=data.index)
+
+    @staticmethod
+    def macd(data, fast=12, slow=26, signal=9):
+        macd, s, h = talib.MACD(data["close"].values, fast, slow, signal)
+        return pd.DataFrame({"macd": macd, "macd_signal": s, "macd_hist": h}, index=data.index)
+
+    @staticmethod
+    def sar(data, acc=0.02, max=0.2):
+        return pd.DataFrame({"sar": talib.SAR(data["high"].values, data["low"].values, acc, max)}, index=data.index)
+
+    @staticmethod
+    def adx(data, period=14):
+        return pd.Series(talib.ADX(data["high"].values, data["low"].values, data["close"].values, period), index=data.index)
+
+    @staticmethod
+    def rsrs_norm(data, N=18, M=600):
+        from core.NumericalOperators import FactorOperators
+        beta = pd.Series(FactorOperators.ts_regression_slope_array(data["low"].values, data["high"].values, N), index=data.index)
+        return (beta - beta.rolling(M, min_periods=M//2).mean()) / beta.rolling(M, min_periods=M//2).std()
+
+    @staticmethod
+    def short_term_trend(data, n1=3):
+        c, l = data["close"], data["low"]
+        f = 100 * (c - l.rolling(n1, min_periods=1).min()) / (c.rolling(n1, min_periods=1).max() - l.rolling(n1, min_periods=1).min())
+        return pd.DataFrame({"short_term_trend": f}, index=data.index)
+
+    @staticmethod
+    def long_term_trend(data, n2=21):
+        c, l = data["close"], data["low"]
+        f = 100 * (c - l.rolling(n2, min_periods=1).min()) / (c.rolling(n2, min_periods=1).max() - l.rolling(n2, min_periods=1).min())
+        return pd.DataFrame({"long_term_trend": f}, index=data.index)
+
+    @staticmethod
+    def ht_trend_score(data, s=5, l=60):
+        c = data["close"]
+        diff = (c.rolling(s).mean() / c.rolling(l).mean() - 1)
+        vol = c.pct_change().rolling(l).std()
+        return diff / (vol * np.sqrt(l))
+
+class VolatilityFactors:
+    @staticmethod
+    def bollinger_bands(data, p=20, u=2, d=2):
+        up, mid, low = talib.BBANDS(data["close"].values, p, u, d, 0)
+        return pd.DataFrame({"bb_upper": up, "bb_middle": mid, "bb_lower": low}, index=data.index)
+
+    @staticmethod
+    def bollinger_breakout(data, w=20, d=2):
+        up, mid, low = talib.BBANDS(data["close"].values, w, d, d)
+        return pd.Series((data["close"].values - mid) / (up - low + 1e-9), index=data.index)
+
+    @staticmethod
+    def gx_atr_factor(data, n=60):
+        p_close = data["close"].shift(1).replace(0, np.nan)
+        tr = pd.concat([(data["high"]-data["low"])/p_close, (data["high"]-p_close).abs()/p_close, (p_close-data["low"]).abs()/p_close], axis=1).max(axis=1)
+        return pd.DataFrame({f"atr_{n}": tr.rolling(n, min_periods=1).mean()}, index=data.index)
+
+class CrowdingFactors:
+    @staticmethod
+    def high_pos_vol_risk(data, w=120, m=1.5, t=0.9):
+        is_hp = ts_rank(data["close"], w) >= t
+        v = data["volume"]
+        is_hv = v > (v.rolling(w).mean() + m * v.rolling(w).std())
+        s = (is_hp & is_hv & (data["close"] < data["open"])).astype(int)
+        return pd.DataFrame({"high_pos_vol_risk": s}, index=data.index)
+
+    @staticmethod
+    def gx_hotspot(data, w=120, d=0.10):
+        c, v, r = data["close"], data["volume"], data["close"].pct_change()
+        res = np.full(len(c), np.nan)
+        lfi = -1
+        cv, rv = c.values, r.values
+        for t in range(1, len(c)):
+            if cv[t] / np.max(cv[max(0, t-w):t]) - 1 <= -d: lfi = t
+            if lfi != -1 and t >= lfi + 6:
+                wr = rv[lfi : t]
+                if len(wr) > 0 and np.sum(np.abs(wr)) != 0: res[t] = np.sum(wr) / np.sum(np.abs(wr))
+        return pd.DataFrame({"gx_hotspot": res}, index=data.index)
+
+class Alpha101Factors:
+    @staticmethod
+    def alpha3(data): return pd.DataFrame({"alpha3": -ts_corr(cs_rank(data["open"]), cs_rank(data["volume"]), 10)}, index=data.index)
+    @staticmethod
+    def alpha4(data): return pd.DataFrame({"alpha4": -ts_rank(cs_rank(data["low"]), 9)}, index=data.index)
+    @staticmethod
+    def alpha6(data): return pd.DataFrame({"alpha6": -ts_corr(data["open"], data["volume"], 10)}, index=data.index)
+    @staticmethod
+    def alpha12(data): return pd.DataFrame({"alpha12": sign(ts_delta(data["volume"], 1)) * (-ts_delta(data["close"], 1))}, index=data.index)
+    @staticmethod
+    def alpha15(data): return pd.DataFrame({"alpha15": -ts_sum(cs_rank(ts_corr(cs_rank(data["high"]), cs_rank(data["volume"]), 3)), 3)}, index=data.index)
+    @staticmethod
+    def alpha16(data): return pd.DataFrame({"alpha16": -cs_rank(ts_cov(cs_rank(data["high"]), cs_rank(data["volume"]), 5))}, index=data.index)
+

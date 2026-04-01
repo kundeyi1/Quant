@@ -1,0 +1,25 @@
+schema: spec-driven
+
+# 项目上下文 (可选)
+# 在创建 artifacts（如提案、设计、规格）时会展示给 AI，帮助其理解项目背景。
+context: |
+  技术栈：Python, Pandas, NumPy, TA-Lib
+  领域：量化交易与因子研究框架
+  核心约定：
+  - 数据目录默认在 D:/DATA，支持相对于项目根目录的 fallback。
+  - 所有因子计算函数采用 `calculate_<name>` 静态方法命名，返回带原始日期索引的 pd.DataFrame。
+  - 数值算子统一引用 `core.NumericalOperators` 模块。
+  - 在计算滚动窗口时，除非特殊说明，默认使用 `min_periods=1`。
+
+# 各阶段 Artifact 规则 (可选)
+# 为特定阶段的文档生产添加自定义规则。
+rules:
+  proposal:
+    - 明确列出对现有代码库的影响范围。
+  specs:
+    - 所有的 Requirement 必须使用规范语言（如必须包含“SHALL”或“MUST”）。
+    - 每个需求必须至少附带一个“Scenario”场景描述。
+  tasks:
+    - 将任务细化为单次编码 session 可完成的小块（约 1-2 小时）。
+    - 必须包含验证（Validation）环节，确保代码通过静态检查。
+

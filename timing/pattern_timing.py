@@ -48,9 +48,9 @@ def find_significant_pivots(df, window=5):
     
     return pd.DataFrame(refined_pivots)
 
-def detect_head_shoulder(df, window=5):
+def detect_head_shoulder(df, window=10):
     """
-    基于极值点序列识别头肩形态
+    基于极值点序列识别头肩形态 (放宽 window 限制以捕捉更长周期形态)
     """
     pivots = find_significant_pivots(df, window)
     pattern_ser = pd.Series(np.nan, index=df.index, dtype=object)
@@ -63,25 +63,18 @@ def detect_head_shoulder(df, window=5):
         types = pts['type'].tolist()
         prices = pts['pivot_price'].tolist()
         
-        # 头肩顶特征: Peak - Trough - Peak - Trough - Peak
-        if types == ['Peak', 'Trough', 'Peak', 'Trough', 'Peak']:
-            p1, t1, p2, t2, p3 = prices
-            # 价格比例要求: 头部(p2)显著高于两肩(p1, p3)，两肩高度接近(差异<3%)
-            if p2 > p1 and p2 > p3 and abs(p1-p3)/p1 < 0.03:
-                # 标记该形态完成的时间点（右肩确认点）
-                pattern_ser.loc[pts.index[-1]] = 'Head and Shoulder'
-                
         # 头肩底特征: Trough - Peak - Trough - Peak - Trough
-        elif types == ['Trough', 'Peak', 'Trough', 'Peak', 'Trough']:
+        if types == ['Trough', 'Peak', 'Trough', 'Peak', 'Trough']:
             t1, p1, t2, p2, t3 = prices
-            if t2 < t1 and t2 < t3 and abs(t1-t3)/t1 < 0.03:
+            # 放宽判定条件：头部(t2)低于两肩(t1, t3)，两肩差异在 5% 以内
+            if t2 < t1 and t2 < t3 and abs(t1-t3)/max(t1,t3) < 0.05:
                 pattern_ser.loc[pts.index[-1]] = 'Inverse Head and Shoulder'
                 
     return pattern_ser
 
-def detect_double_pattern(df, window=5, threshold=0.015):
+def detect_double_pattern(df, window=10, threshold=0.03):
     """
-    识别双顶/双底 (M头/W底)
+    识别双顶/双底 (M头/W底) (放宽 threshold 限制)
     """
     pivots = find_significant_pivots(df, window)
     pattern_ser = pd.Series(np.nan, index=df.index, dtype=object)
@@ -93,16 +86,10 @@ def detect_double_pattern(df, window=5, threshold=0.015):
         types = pts['type'].tolist()
         prices = pts['pivot_price'].tolist()
         
-        # 双顶: Peak - Trough - Peak
-        if types == ['Peak', 'Trough', 'Peak']:
-            p1, t1, p2 = prices
-            # 两个顶高度接近，且中间有明显回撤
-            if abs(p1-p2)/max(p1,p2) < threshold and t1 < min(p1, p2) * 0.98:
-                pattern_ser.loc[pts.index[-1]] = 'Double Top'
-                
         # 双底: Trough - Peak - Trough
-        elif types == ['Trough', 'Peak', 'Trough']:
+        if types == ['Trough', 'Peak', 'Trough']:
             t1, p1, t2 = prices
+            # 两个底高度接近，且中间有明显反弹
             if abs(t1-t2)/max(t1,t2) < threshold and p1 > max(t1, t2) * 1.02:
                 pattern_ser.loc[pts.index[-1]] = 'Double Bottom'
                 

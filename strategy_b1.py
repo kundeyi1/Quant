@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
-from core import logger, DataProvider, NAVAnalyzer
+from core import logger, DataProvider, NavAnalyzer
 from factors.technical_factors import TrendFactors
 
 def run_b1_strategy(start_date='2023-01-01', end_date='2024-01-01'):
@@ -34,7 +34,7 @@ def run_b1_strategy(start_date='2023-01-01', end_date='2024-01-01'):
     portfolio_daily_return = data[data['signal']].groupby('date')['close'].pct_change().mean()
     
     # 5. 回测分析
-    analyzer = NAVAnalyzer(portfolio_daily_return.dropna().cumsum())
+    analyzer = NavAnalyzer(portfolio_daily_return.dropna().cumsum())
     report = analyzer.generate_report()
     
     logger.info("B1 策略回测完成")

@@ -83,7 +83,6 @@ class TimingMomTester:
 
     def run_full_evaluation(self, signal_types=None):
         if signal_types is None:
-            # 修改为仅执行形态学识别的检验：双底、头肩底
             signal_types = ["double_bottom", "head_shoulder_bottom"]
 
         logger.info(f"\n{'='*20} 开始择时信号绩效评估 {'='*20}")

@@ -13,7 +13,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 TRADING_DAYS_PER_YEAR = 252
 
-class NAVAnalyzer:
+class NavAnalyzer:
     """
     资产净值分析器类
     封装了净值计算、绩效评估和恢复分析的核心逻辑
@@ -130,13 +130,18 @@ class NAVAnalyzer:
         }
 
 
+class Visualizer:
+    """
+    绘图可视化中心类
+    """
     @staticmethod
-    def plot_timing_nav_with_drawdown(nav_ser, benchmark_nav=None, title="择时净值", output_path=None):
+    def plot_performance_nav(nav_ser, benchmark_nav=None, title="Performance NAV", stats=None, output_path=None):
         """
-        核心绘图逻辑：绘制净值曲线与动态回撤阴影
+        绘制绩效净值图：包含净值曲线与动态回撤阴影
         :param nav_ser: 策略净值 (pd.Series)
         :param benchmark_nav: 基准净值 (pd.Series, 可选)
         :param title: 图表标题
+        :param stats: 绩效指标元组 (ann_ret, vol, sr, mdd) 用于在图上显示文本
         :param output_path: 保存路径
         """
         fig, ax1 = plt.subplots(figsize=(12, 6))
@@ -158,16 +163,23 @@ class NAVAnalyzer:
         roll_max = nav_ser.cummax()
         drawdown = (nav_ser / roll_max - 1.0)
         
-        ax2.fill_between(dates, drawdown, 0, color='lightgrey', alpha=0.5, label='回撤 (右)')
+        ax2.fill_between(dates, drawdown, 0, color='lightgrey', alpha=0.5, label='回撤 (右)', zorder=0)
         ax2.set_ylabel('回撤')
         ax2.set_ylim(-0.6, 0) # 统一设置回撤轴范围
+        
+        # 3. 添加绩效统计文本 (如果提供)
+        if stats:
+            ann_ret, vol, sr, mdd = stats
+            text = (f"年化收益: {ann_ret:.2f}%\n波动率: {vol:.2f}%\n夏普比: {sr:.2f}\n最大回撤: {mdd:.2f}%")
+            ax1.text(0.01, 0.97, text, transform=ax1.transAxes, va='top', 
+                    bbox=dict(facecolor='white', alpha=0.8), fontsize=9)
         
         plt.title(title)
         
         # 合并图例
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', frameon=True, framealpha=0.8)
         
         if output_path:
             plt.savefig(output_path, bbox_inches='tight')
@@ -175,52 +187,6 @@ class NAVAnalyzer:
             return output_path
         else:
             return fig
-
-class Visualizer:
-    """
-    绘图可视化中心类
-    """
-    @staticmethod
-    def plot_performance_nav(nav_ser, title, stats, output_dir, filename):
-        """绘制带绩效看板和回撤阴影的净值图"""
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        dates = pd.to_datetime(nav_ser.index)
-        
-        # 1. 绘制回撤阴影 (Top-down) 并添加右侧标尺
-        ax_dd = ax.twinx()  # 创建共享x轴的次坐标轴
-        roll_max = nav_ser.cummax()
-        drawdown = 1 - (nav_ser / roll_max)
-        
-        # 填充灰色阴影，并设置 label 用于图例
-        fill_coll = ax_dd.fill_between(dates, drawdown.values, 0, color='gray', alpha=0.2, label='回撤 (右)')
-        ax_dd.set_ylim(0.6, 0)  # 回撤轴范围从0%到-100%
-        
-        # 设置右轴标尺
-        ax_dd.set_ylabel('回撤')
-        ax_dd.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x*100:.0f}%'))
-        
-        # 2. 绘制净值曲线
-        line_nav = ax.plot(dates, nav_ser.values, linewidth=1, color='#004488', label='净值 (左)')
-        ax.set_ylabel('净值')
-        
-        # 3. 合并图例
-        # 由于使用了 twinx，需要手动合并两个 axis 的图例
-        lines = line_nav + [plt.Rectangle((0, 0), 1, 1, fc="gray", alpha=0.2)]
-        labels = [l.get_label() for l in line_nav] + ['动态回撤']
-        ax.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=2, frameon=False)
-        
-        # 4. 添加绩效统计
-        ann_ret, vol, sr, mdd = stats
-        text = (f"年化收益: {ann_ret:.2f}%\n波动率: {vol:.2f}%\n夏普比: {sr:.2f}\n最大回撤: {mdd:.2f}%")
-        ax.text(0.01, 0.97, text, transform=ax.transAxes, va='top', bbox=dict(facecolor='white', alpha=0.8), fontsize=9)
-        
-        ax.set_title(title)
-        ax.grid(False)
-        plt.tight_layout()
-        
-        if output_dir: 
-            plt.savefig(os.path.join(output_dir, filename), dpi=150)
-        plt.close()
 
     @staticmethod
     def plot_rolling_returns(series_dict, windows_years=[1, 3, 5], output_dir=None, filename="rolling_returns.png"):
@@ -274,7 +240,7 @@ class Visualizer:
         x = pd.to_datetime(common_idx)
         
         def get_label(name, nav_ser):
-            analyzer = NAVAnalyzer(nav_ser.pct_change().fillna(0))
+            analyzer = NavAnalyzer(nav_ser.pct_change().fillna(0))
             s = analyzer.compute_performance()
             return f"{name} (收益:{s['annual_return']:.1f}% 夏普:{s['sharpe_ratio']:.2f} 回撤:{s['max_drawdown']:.1f}%)"
 
@@ -295,13 +261,16 @@ class PerformanceReport:
     @staticmethod
     def run_full_report(portfolio_returns, asset_df, results_dir, benchmark_name=None):
         os.makedirs(results_dir, exist_ok=True)
-        analyzer = NAVAnalyzer(portfolio_returns, name="Portfolio")
+        analyzer = NavAnalyzer(portfolio_returns, name="Portfolio")
         stats = analyzer.compute_performance()
         
         # 1. 绘图
-        Visualizer.plot_performance_nav(analyzer.nav, 'Portfolio NAV', 
-                                      (stats['annual_return'], stats['volatility'], stats['sharpe_ratio'], stats['max_drawdown']), 
-                                      results_dir, 'portfolio_nav.png')
+        Visualizer.plot_performance_nav(
+            nav_ser=analyzer.nav, 
+            title='Portfolio NAV', 
+            stats=(stats['annual_return'], stats['volatility'], stats['sharpe_ratio'], stats['max_drawdown']), 
+            output_path=os.path.join(results_dir, 'portfolio_nav.png')
+        )
         
         # 2. 年度统计
         analyzer.get_yearly_stats().to_csv(os.path.join(results_dir, "yearly_stats.csv"), encoding='utf-8-sig')
@@ -318,7 +287,7 @@ class PerformanceReport:
         """从CSV载入并分析"""
         nav_df = pd.read_csv(nav_csv_path, index_col=0, parse_dates=True)
         nav_ser = nav_df.iloc[:, 0] if len(nav_df.columns) == 1 else nav_df['nav']
-        analyzer = NAVAnalyzer(nav_ser.pct_change().fillna(0), name=name)
+        analyzer = NavAnalyzer(nav_ser.pct_change().fillna(0), name=name)
         stats = analyzer.compute_performance()
         
         # 结果汇总
@@ -347,8 +316,11 @@ class PerformanceReport:
         """分资产绩效分析"""
         asset_rets = asset_df.pct_change().fillna(0)
         for col in asset_df.columns:
-            analyzer = NAVAnalyzer(asset_rets[col], name=col)
+            analyzer = NavAnalyzer(asset_rets[col], name=col)
             s = analyzer.compute_performance()
-            Visualizer.plot_performance_nav(analyzer.nav, f"{col} NAV", 
-                                          (s['annual_return'], s['volatility'], s['sharpe_ratio'], s['max_drawdown']), 
-                                          results_dir, f"asset_{col}.png")
+            Visualizer.plot_performance_nav(
+                nav_ser=analyzer.nav, 
+                title=f"{col} NAV", 
+                stats=(s['annual_return'], s['volatility'], s['sharpe_ratio'], s['max_drawdown']), 
+                output_path=os.path.join(results_dir, f"asset_{col}.png")
+            )

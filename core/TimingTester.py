@@ -3,8 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from scipy import stats as scipy_stats
-
 from core.Logger import logger
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
 
 class TimingTester:
     def __init__(self, signal_series, benchmark_series, output_dir="results/timing"):
@@ -57,13 +58,22 @@ class TimingTester:
         p = stats_val["period"]
         sample_rets = data["sample_rets"]
         base_dist = data["base_dist"]
+        
         plt.figure(figsize=(10, 6))
-        sns.histplot(base_dist, kde=True, color="gray", alpha=0.3, label="Base", stat="density")
-        sns.histplot(sample_rets, kde=True, color="red", alpha=0.6, label="Signal", stat="density")
-        plt.axvline(stats_val["sample_avg"], color="red", linestyle="--")
-        plt.axvline(stats_val["universe_avg"], color="blue", linestyle="--")
-        plt.title(f"{title} (T+{p})")
+        # 基准分布 (灰色) 
+        sns.histplot(base_dist, kde=True, color="gray", alpha=0.3, 
+                     label=f"Base (Avg: {stats_val['universe_avg']:.2%})", stat="density", zorder=1)
+        # 信号分布 (红色) 
+        sns.histplot(sample_rets, kde=True, color="salmon", alpha=0.4, 
+                     label=f"Signal (Avg: {stats_val['sample_avg']:.2%})", stat="density", zorder=2, edgecolor='none')
+        
+        # 均线位置
+        plt.axvline(stats_val["sample_avg"], color="red", linestyle="--", linewidth=1.5, zorder=3)
+        plt.axvline(stats_val["universe_avg"], color="blue", linestyle="--", linewidth=1.5, zorder=3)
+        
+        plt.title(f"{title} (Forward {p} Days)")
         plt.legend()
+        plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, f"timing_dist_T{p}.png"))
         plt.close()
 

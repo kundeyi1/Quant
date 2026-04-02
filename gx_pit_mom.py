@@ -117,4 +117,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     run_all(sector_type=args.sector, signals=args.signals)
-

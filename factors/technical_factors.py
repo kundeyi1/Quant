@@ -9,6 +9,39 @@ from core.NumericalOperators import (
 
 class PriceFactors:
     @staticmethod
+    def price_abs_pos(data, window=120):
+        """
+        绝对价格位置 (Absolute Price Position)
+        逻辑: 当前价格在过去 N 日内的分位数 (0-1)
+        """
+        return pd.DataFrame({"price_abs_pos": ts_rank(data["close"], window)}, index=data.index)
+
+    @staticmethod
+    def price_rel_ma(data, window=20):
+        """
+        相对均线位置 (Relative Position to MA)
+        逻辑: (Price - MA) / Std
+        衡量价格相对于均线的偏离标准差个数，偏差越小分数越高
+        """
+        close = data["close"]
+        ma = close.rolling(window=window).mean()
+        std = close.rolling(window=window).std()
+        z_score = - abs(close - ma) / (std + 1e-9)
+        return pd.DataFrame({"price_rel_ma": z_score}, index=data.index)
+
+    @staticmethod
+    def price_dist_high(data, window=20):
+        """
+        相对于前期关键高点的距离 (Distance to Historic High)
+        逻辑: (Price / HHV - 1)
+        衡量回撤程度，识别平台回踩或突破边缘
+        """
+        high = data["high"]
+        hhv = high.rolling(window=window).max()
+        dist = (data["close"] / hhv - 1)
+        return pd.DataFrame({"price_dist_high": dist}, index=data.index)
+
+    @staticmethod
     def overhead_supply(data, window=20):
         high = data["high"]
         low = data["low"]
@@ -21,18 +54,6 @@ class PriceFactors:
         sum_total = volume.rolling(window=window, min_periods=1).sum()
         overhead_supply = sum_supply / sum_total
         return pd.DataFrame({"overhead_supply": overhead_supply}, index=data.index)
-
-    @staticmethod
-    def price_percentile(data, window=120):
-        """
-        计算价格在过去x天内的分位点
-        :param data: pandas DataFrame, 包含 'close' 列
-        :param window: int, 回溯周期
-        :return: DataFrame with 'price_percentile'
-        """
-        # 使用 ts_rank 函数计算滚动分位数
-        percentile = ts_rank(data["close"], window)
-        return pd.DataFrame({"price_percentile": percentile}, index=data.index)
 
     @staticmethod
     def price_bias(data, window=20):
@@ -65,14 +86,40 @@ class VolumeFactors:
         return pd.DataFrame({"obv": obv}, index=data.index)
 
     @staticmethod
-    def volume_bias(data, window=20):
+    def volume_abs_dryness(data, window=20):
         """
-        成交量乖离率 (Volume Bias)
-        逻辑: Volume / MA(Volume, N) - 1
+        绝对缩量程度 (Absolute Volume Dryness)
+        逻辑: Volume / MA(Volume, 2 * T)
+        衡量今日成交量相对于长周期均值的比例。值越小代表缩量越极致。
+        """
+        volume = data["volume"]
+        long_vol_ma = volume.rolling(window=window * 2).mean()
+        dryness_ratio = volume / (long_vol_ma + 1e-9)
+        return pd.DataFrame({"volume_abs_dryness": dryness_ratio}, index=data.index)
+
+    @staticmethod
+    def volume_yes_rel_dryness(data, window=5):
+        """
+        相对缩量比例 (Yesterday's Relative Volume Dryness)
+        逻辑: Volume / Volume.shift(1)
+        衡量今日相对于昨日的缩量比例 (例如：0.5 代表缩量一半)
+        """
+        volume = data["volume"]
+        ratio = volume / (volume.shift(1) + 1e-9)
+        return pd.DataFrame({"volume_yes_rel_dryness": ratio}, index=data.index)
+
+    @staticmethod
+    def volume_std_bias(data, window=20):
+        """
+        成交量乖离标准差 (Volume Std Score)
+        逻辑: (Volume - MA) / Std
+        衡量成交量偏离常态的程度。极致缩量通常对应极负值，放量对应极正值。
         """
         volume = data["volume"]
         ma = volume.rolling(window=window).mean()
-        return (volume / ma - 1)
+        std = volume.rolling(window=window).std()
+        v_score = (volume - ma) / (std + 1e-9)
+        return pd.DataFrame({"volume_std_score": v_score}, index=data.index)
 
     @staticmethod
     def volume_volatility(data, window=60):
@@ -200,6 +247,53 @@ class TrendFactors:
         return pd.DataFrame({"sma": talib.SMA(data["close"].values, timeperiod=period)}, index=data.index)
 
     @staticmethod
+    def adx(data, period=20):
+        """
+        ADX 趋势强度
+        逻辑: 衡量趋势强弱，不分方向。
+        """
+        return pd.DataFrame({"adx": talib.ADX(data["high"].values, data["low"].values, data["close"].values, timeperiod=period)}, index=data.index)
+
+    @staticmethod
+    def plus_di(data, period=20):
+        """
+        正向趋向指标 (+DI)
+        逻辑: 衡量上升趋势强度
+        """
+        return pd.DataFrame({"plus_di": talib.PLUS_DI(data["high"].values, data["low"].values, data["close"].values, timeperiod=period)}, index=data.index)
+
+    @staticmethod
+    def minus_di(data, period=20):
+        """
+        负向趋向指标 (-DI)
+        逻辑: 衡量下跌趋势强度
+        """
+        return pd.DataFrame({"minus_di": talib.MINUS_DI(data["high"].values, data["low"].values, data["close"].values, timeperiod=period)}, index=data.index)
+
+    @staticmethod
+    def new_high_count(data, window=20):
+        """
+        过去20天创20日新高的天数
+        逻辑: 衡量趋势的持续性和创新高的频率
+        """
+        high = data["high"]
+        is_new_high = (high == high.rolling(window).max()).astype(int)
+        count = is_new_high.rolling(window).sum()
+        return pd.DataFrame({"new_high_count": count}, index=data.index)
+
+    @staticmethod
+    def trend_inertia(data, window=20):
+        """
+        趋势惯性 (Trend Inertia)
+        逻辑: Close / MA(4*T) - 1
+        直接返回百分比，不再取排名
+        """
+        close = data["close"]
+        long_window = window * 3
+        trend = close / close.rolling(window=long_window).mean() - 1
+        return pd.DataFrame({"trend_inertia": trend}, index=data.index)
+
+    @staticmethod
     def ema(data, period=14):
         """
         指数移动平均线 (EMA)
@@ -238,13 +332,6 @@ class TrendFactors:
         抛物线转向指标 (SAR)
         """
         return pd.DataFrame({"sar": talib.SAR(data["high"].values, data["low"].values, acc, max)}, index=data.index)
-
-    @staticmethod
-    def adx(data, period=14):
-        """
-        平均趋向指数 (ADX)
-        """
-        return pd.Series(talib.ADX(data["high"].values, data["low"].values, data["close"].values, period), index=data.index)
 
     @staticmethod
     def rsrs_norm(data, N=18, M=600):
@@ -311,6 +398,39 @@ class VolatilityFactors:
         """
         up, mid, low = talib.BBANDS(data["close"].values, w, d, d)
         return pd.Series((data["close"].values - mid) / (up - low + 1e-9), index=data.index)
+
+    @staticmethod
+    def volatility_compression(data, window=20):
+        """
+        绝对波动收敛度 (Absolute Volatility Compression)
+        逻辑: ATR(5) / ATR(T)
+        衡量短期波动相对于中期波动的比例。
+        物理意义: 值越小代表波动越极端收敛。
+        """
+        high, low, close = data["high"], data["low"], data["close"]
+        p_close = close.shift(1).replace(0, np.nan)
+        tr = pd.concat([(high - low) / p_close, (high - p_close).abs() / p_close, (p_close - low).abs() / p_close], axis=1).max(axis=1)
+        atr_5 = tr.rolling(5).mean()
+        atr_t = tr.rolling(window).mean()
+        compression_ratio = atr_5 / (atr_t + 1e-9)
+        return pd.DataFrame({"volatility_compression": compression_ratio}, index=data.index)
+
+    @staticmethod
+    def atr_std_bias(data, window=20):
+        """
+        波动率乖离标准差 (ATR Std Bias)
+        逻辑: (ATR(5) - MA(ATR, T)) / Std(ATR, T)
+        衡量当前波动率偏离常态的程度。
+        物理意义: 极负值(如 < -1.5)代表进入了极度寂静期。
+        """
+        high, low, close = data["high"], data["low"], data["close"]
+        p_close = close.shift(1).replace(0, np.nan)
+        tr = pd.concat([(high - low) / p_close, (high - p_close).abs() / p_close, (p_close - low).abs() / p_close], axis=1).max(axis=1)
+        atr = tr.rolling(5).mean()
+        ma = atr.rolling(window=window).mean()
+        std = atr.rolling(window=window).std()
+        score = (atr - ma) / (std + 1e-9)
+        return pd.DataFrame({"atr_std_bias": score}, index=data.index)
 
     @staticmethod
     def gx_atr_factor(data, n=60):

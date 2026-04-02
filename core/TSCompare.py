@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from core.NavAnalyzer import NAVAnalyzer
+from core.NavAnalyzer import NavAnalyzer
 from core.DataManager import DataProvider, normalize_series
 
 # 设置绘图字体
@@ -179,7 +179,7 @@ class TSComparator:
         for col in df_combined.columns:
             rets = df_combined[col].pct_change().fillna(0)
             # 使用 NAVAnalyzer 进行指标计算
-            analyzer = NAVAnalyzer(rets)
+            analyzer = NavAnalyzer(rets)
             stats = analyzer.compute_stats()
             perf_rows.append({
                 '名称': col,

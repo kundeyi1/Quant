@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import os
 import warnings
 from core.Logger import logger
-from core.NavAnalyzer import Visualizer, NAVAnalyzer
+from core.NavAnalyzer import Visualizer, NavAnalyzer
 from core.NumericalOperators import cs_rank
 
 warnings.filterwarnings('ignore')
@@ -226,7 +226,7 @@ class SparseSignalTester:
         # 4. 计算连续净值指标 (Spliced 逻辑)
         # 获取多空组合 (LS) 净值
         ls_equity = self._calculate_continuous_strategy_returns()
-        ls_analyzer = NAVAnalyzer(ls_equity.pct_change().dropna())
+        ls_analyzer = NavAnalyzer(ls_equity.pct_change().dropna())
         ls_perf = ls_analyzer.compute_performance()
 
         # 计算累积超额收益 (相对于基准)
@@ -260,7 +260,7 @@ class SparseSignalTester:
                     long_equity[all_dates[e_idx]] = curr_l
         
         long_equity_ser = pd.Series(long_equity).sort_index()
-        long_analyzer = NAVAnalyzer(long_equity_ser.pct_change().dropna())
+        long_analyzer = NavAnalyzer(long_equity_ser.pct_change().dropna())
         long_perf = long_analyzer.compute_performance()
 
         # 5. 汇总指标字典
@@ -631,7 +631,7 @@ class SparseSignalTester:
         else:
             ann_ret = 0
             
-        ls_analyzer = NAVAnalyzer(ls_rets)
+        ls_analyzer = NavAnalyzer(ls_rets)
         perf = ls_analyzer.compute_performance()
         label_text = f"多空净值 (年化: {ann_ret:.1f}%, 回撤: {perf['max_drawdown']:.1f}%)"
         
@@ -672,7 +672,7 @@ class SparseSignalTester:
         else:
             ann_ret_spliced = 0
 
-        spliced_analyzer = NAVAnalyzer(spliced_curve.pct_change().dropna())
+        spliced_analyzer = NavAnalyzer(spliced_curve.pct_change().dropna())
         perf_spliced = spliced_analyzer.compute_performance()
         label_text = f"拼接净值 (年化: {ann_ret_spliced:.1f}%, 回撤: {perf_spliced['max_drawdown']:.1f}%)"
         

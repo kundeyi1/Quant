@@ -50,33 +50,30 @@ def run_momentum_filter_test(start_date="2014-01-01", end_date="2026-03-31", T=2
     df = dp.get_ohlc_data(index_file, name="000985")
     df = df.loc[:end_date]
     
-    # 计算基础因子
-    f_price = PriceFactors.price_position(df, window=T)
-    f_vol = VolumeFactors.volume_dryness(df, window=T)
-    f_trend = TrendFactors.trend_inertia(df, window=T)
-    f_vola = VolatilityFactors.volatility_compression(df, window=T)
+    # --- 因子计算 (同步 test_new_timing_factors.py 的最新物理量逻辑) ---
+    f_abs_pos = PriceFactors.price_abs_pos(df, window=250)['price_abs_pos']
+    f_dist_high = PriceFactors.price_dist_high(df, window=60)['price_dist_high']
+    f_price_rel_ma = PriceFactors.price_rel_ma(df, window=T)['price_rel_ma']
     
-    # 评分化
-    score_price = 1 - (f_price['price_position'].clip(-2, 2).abs() / 2)
-    score_vol = f_vol['volume_dryness']
-    score_trend = f_trend['trend_inertia']
-    score_vola = f_vola['volatility_compression']
+    f_vol_dry = VolumeFactors.volume_abs_dryness(df, window=T)['volume_abs_dryness']
+    f_vol_std = VolumeFactors.volume_std_bias(df, window=T)['volume_std_score']
     
-    # 形态识别
-    df_slice = df.loc[start_date:end_date]
-    res_db = pattern_timing.detect_double_pattern(df_slice, window=10, threshold=0.03)
-    res_hs = pattern_timing.detect_head_shoulder(df_slice, window=10)
+    f_plus_di = TrendFactors.plus_di(df, period=20)['plus_di']
+    f_minus_di = TrendFactors.minus_di(df, period=20)['minus_di']
+    f_nh_count = TrendFactors.new_high_count(df, window=20)['new_high_count']
     
-    # 构造基础信号字典 (Candidate Signals)
-    # 对于因子，取前 10% 高分作为候选点
-    quantile_threshold = 0.9
+    f_vola_comp = VolatilityFactors.volatility_compression(df, window=T)['volatility_compression']
+    
+    # 构造基础信号字典 (使用 test_new_timing_factors.py 中验证过的物理阈值作为 Baseline)
     base_signals = {
-        "price_position": (score_price > score_price.quantile(quantile_threshold)).astype(int),
-        "volume_dryness": (score_vol > score_vol.quantile(quantile_threshold)).astype(int),
-        "trend_inertia": (score_trend > score_trend.quantile(quantile_threshold)).astype(int),
-        "volatility_compression": (score_vola > score_vola.quantile(quantile_threshold)).astype(int),
-        # "double_bottom": (res_db == "Double Bottom").astype(int),
-        # "head_shoulder_bottom": (res_hs == "Inverse Head and Shoulder").astype(int)
+        "price_low_abs": (f_abs_pos < 0.05).astype(int),
+        "price_near_high": (f_dist_high > -0.005).astype(int),
+        "price_rel_ma": (f_price_rel_ma < -2.0).astype(int),
+        "volume_extreme_dry": (f_vol_dry < 0.75).astype(int),
+        "volume_std_score": (f_vol_std < -1.5).astype(int),
+        "trend_bull_strength": ((f_plus_di - f_minus_di) > 15).astype(int),
+        "trend_persistent_high": (f_nh_count > 10).astype(int),
+        "vola_extreme_comp": (f_vola_comp < 0.75).astype(int)
     }
 
     # 持有期收益 (Forward 20D)
@@ -117,7 +114,8 @@ def run_momentum_filter_test(start_date="2014-01-01", end_date="2026-03-31", T=2
     output_dir = "results/momentum_filter_sensitivity"
     os.makedirs(output_dir, exist_ok=True)
     
-    output_file = os.path.join(output_dir, f"momentum_threshold_performance_{quantile_threshold}.csv")
+    # 物理阈值版本已不再使用 quantile_threshold 变量，统一命名为 physical_threshold
+    output_file = os.path.join(output_dir, "momentum_threshold_performance_physical.csv")
     perf_df.to_csv(output_file, index=False)
     
     # 打印简要结论

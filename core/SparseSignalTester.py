@@ -239,29 +239,57 @@ class SparseSignalTester:
         else:
             cumulative_excess = ls_equity.iloc[-1] - 1
         
-        # 获取纯多头净值
+        # 获取纯多头净值 (仅统计信号触发期间的累计收益率)
         all_dates = self.price_df.index
         long_equity = {all_dates[0]: 1.0}
         curr_l = 1.0
+        
+        # 为了计算年化，需要知道信号覆盖的总交易日数
+        total_signal_days = 0
         
         sorted_trig = sorted(self.trigger_dates)
         for i, sd in enumerate(sorted_trig):
             idx = all_dates.get_loc(sd)
             e_idx = min(idx + self.period, len(all_dates)-1)
+            # 如果下一个信号早于当前信号结束，则截断，避免重复计算
             if i+1 < len(sorted_trig):
                 e_idx = min(e_idx, all_dates.get_loc(sorted_trig[i+1]))
+            
+            if e_idx <= idx: continue
             
             groups = self._signal_groups_cache.get(sd)
             if groups:
                 l_assets = groups.get(self.n_groups, [])
                 if l_assets:
-                    l_ret = self.price_df.iloc[e_idx].reindex(l_assets).div(self.price_df.iloc[idx].reindex(l_assets)).mean() - 1
+                    # 获取该时段内的资产价格并计算平均收益
+                    p_start = self.price_df.iloc[idx].reindex(l_assets)
+                    p_end = self.price_df.iloc[e_idx].reindex(l_assets)
+                    l_ret = (p_end / p_start).mean() - 1
+                    
                     curr_l *= (1 + (0 if pd.isna(l_ret) else l_ret))
                     long_equity[all_dates[e_idx]] = curr_l
+                    total_signal_days += (e_idx - idx)
         
         long_equity_ser = pd.Series(long_equity).sort_index()
+        
+        # 修正年化收益率计算：如果只看信号期间，days 应该使用信号覆盖的总天数，而不是净值序列的长度
+        # 但为了保持一致性，我们这里采用“总区间年化”逻辑，或者修复 NavAnalyzer 的天数判断
         long_analyzer = NavAnalyzer(long_equity_ser.pct_change().dropna())
         long_perf = long_analyzer.compute_performance()
+        
+        # 如果信号非常稀疏，总天数很少，会导致幂运算结果极大
+        # 强制修正：如果 long_equity_ser 长度远小于整个回测区间，改用总采样区间天数进行年化
+        long_calmar = 0
+        if len(long_equity_ser) > 1:
+            total_obs_days = len(all_dates)
+            long_perf['annual_return'] = (long_equity_ser.iloc[-1] ** (252 / total_obs_days) - 1) * 100
+            
+            # 同时修正夏普比和卡玛比
+            vol_ann = long_analyzer.returns.std() * np.sqrt(252) * 100
+            long_perf['sharpe_ratio'] = long_perf['annual_return'] / vol_ann if vol_ann != 0 else 0
+            # 注意：此处使用的 long_perf['max_drawdown'] 已经是百分比，NavAnalyzer 返回的是 *100 后的值
+            long_perf['max_drawdown'] = (long_equity_ser / long_equity_ser.cummax() - 1).min() * 100
+            long_calmar = (long_perf['annual_return'] / abs(long_perf['max_drawdown'])) if long_perf['max_drawdown'] != 0 else 0
 
         # 5. 汇总指标字典
         self.performance_stats = {
@@ -282,7 +310,7 @@ class SparseSignalTester:
             'LS_Ann_Ret': ls_perf['annual_return'] / 100.0,
             'LS_Max_DD': ls_perf['max_drawdown'] / 100.0,
             'LS_Sharpe': ls_perf['sharpe_ratio'],
-            'Long_Calmar': (long_perf['annual_return'] / abs(long_perf['max_drawdown'])) if long_perf['max_drawdown'] != 0 else 0,
+            'Long_Calmar': long_calmar,
             'LS_Calmar': (ls_perf['annual_return'] / abs(ls_perf['max_drawdown'])) if ls_perf['max_drawdown'] != 0 else 0,
             'Yearly_Rank_IC': yearly_ic.to_dict()
         }
@@ -473,8 +501,8 @@ class SparseSignalTester:
         # 4. 绘制多头、空头、多空组合曲线
         self.plot_l_s_ls_combined_curve(title="多头/空头/对冲组合表现对比")
         
-        # 5. 绘制全时段连续净值曲线 (含空仓横盘)
-        self.plot_full_timeline_equity_curve(group_results, title="全时段多空组合净值")
+        # 5. 绘制全时段连续净值曲线 (含空仓横盘) - 用户要求暂时不再画这张图
+        # self.plot_full_timeline_equity_curve(group_results, title="全时段多空组合净值")
 
     def plot_excess_return_bar(self, title="分组平均超额表现"):
         """
@@ -806,10 +834,10 @@ class SparseSignalTester:
         )
         
         Visualizer.plot_performance_nav(
-            equity_curve_full, 
-            title, 
-            stats_tuple, 
-            self.output_dir, 
-            "equity_curve_full_timeline.png"
+            equity_curve_full,
+            benchmark_nav=(1 + self.benchmark_series.pct_change().fillna(0)).cumprod() if self.benchmark_series is not None else None,
+            title=title, 
+            stats=stats_tuple, 
+            output_path=os.path.join(self.output_dir, "equity_curve_full_timeline.png")
         )
         logger.info(f"Full timeline equity curve saved to: {os.path.join(self.output_dir, 'equity_curve_full_timeline.png')}")

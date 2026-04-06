@@ -7,14 +7,14 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 # ----------------- 1. Configuration -----------------
-DATA_FILE = Path("D:/DATA/all_stock_data_ts_20140102_20251231.csv")
+DATA_FILE = Path("D:/DATA/STOCK/all_stock_data_ts_20140102_20251231.csv")
 START_DATE = "2014-01-01"
 END_DATE = "2025-12-31"
-STRATEGY_NAME = "REO 前一天红brick、long_term>85；当天白线在黄线上，long_term>=70，short_term<=30"
+STRATEGY_NAME = "Brick_PrevLT40_GreenToRed_SizeGE1"
 RESULTS_DIR = Path("d:/Dev/Quant/results/strategy_reo")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-HOLD_DAYS_MAX = 2
+HOLD_DAYS_MAX = 4
 
 def is_standard_stock(code):
     s = str(code).zfill(6)
@@ -52,11 +52,31 @@ def calculate_brick(df):
     var6a = var5a - var2a
     brick = np.where(var6a > 4, var6a - 4, 0)
     
-    # AA:=(REF(砖型图,1)<砖型图); (红柱判定)
+    # 砖型图的具体数值即为柱子的“收盘值”
+    # AA:=(REF(砖型图,1)<砖型图); (红柱判定: 今天比昨天大)
     ref_brick = np.roll(brick, 1)
     ref_brick[0] = 0
     red_bar = (brick > ref_brick).astype(int)
-    return red_bar, brick
+    
+    # BB:=(REF(砖型图,1)>砖型图); (绿柱判定: 今天比昨天小)
+    green_bar = (brick < ref_brick).astype(int)
+    
+    # 柱体长度定义：ABS(砖型图 - REF(砖型图, 1))
+    bar_size = np.abs(brick - ref_brick)
+    ref_bar_size = np.roll(bar_size, 1)
+    ref_bar_size[0] = 0
+    
+    # 用户要求：
+    # 1. 前一天砖型图数值 (REF(brick, 1)) < 40
+    # 2. 前一天是绿柱 (REF(green_bar, 1) == 1)
+    # 3. 当天是红柱 (red_bar == 1)
+    # 4. 当天红柱长度 > 前一天绿柱长度的 2/3
+    ref_green_bar = np.roll(green_bar, 1)
+    ref_green_bar[0] = 0
+    
+    brick_buy_signal = (ref_brick < 40) & (ref_green_bar == 1) & (red_bar == 1) & (bar_size > (ref_bar_size))
+    
+    return red_bar, green_bar, brick, bar_size, brick_buy_signal
 
 def calculate_reo_indicators(df):
     if len(df) < 120: return None
@@ -64,53 +84,26 @@ def calculate_reo_indicators(df):
     high = df['high'].values
     low = df['low'].values
     
-    # 1. zxt_line (多空线 - 黄线) 和 white_line (双重EMA - 白线)
-    ma14 = talib.SMA(close, 14)
-    ma28 = talib.SMA(close, 28)
-    ma57 = talib.SMA(close, 57)
-    ma114 = talib.SMA(close, 114)
-    df['yellow_line'] = (ma14 + ma28 + ma57 + ma114) / 4
+    # KDJ Calculation (Standard KDJ: RSV=(C-LLV(L,9))/(HHV(H,9)-LLV(L,9))*100, K=SMA(RSV,3,1), D=SMA(K,3,1), J=3*K-2*D)
+    df['k'], df['d'] = talib.STOCH(high, low, close, 
+                                  fastk_period=9, slowk_period=3, slowk_matype=0, 
+                                  slowd_period=3, slowd_matype=0)
+    df['j'] = 3 * df['k'] - 2 * df['d']
     
-    ema_inner = talib.EMA(close, 10)
-    df['white_line'] = talib.EMA(ema_inner, 10)
+    # Re-calculate brick with new logic
+    red_bar, green_bar, brick, bar_size, brick_buy_signal = calculate_brick(df)
+    df['brick'] = brick
+    df['bar_size'] = bar_size
+    df['green_bar'] = green_bar
+    df['brick_buy_signal'] = brick_buy_signal
     
-    # 2. Reversal Factors (short_term, long_term)
-    # 逻辑: 100*(C-LLV(L,N))/(HHV(C,N)-LLV(L,N))
-    def calc_rev(c, l, n):
-        llv_l = pd.Series(l).rolling(n, min_periods=1).min()
-        hhv_c = pd.Series(c).rolling(n, min_periods=1).max()
-        return 100 * (pd.Series(c) - llv_l) / (hhv_c - llv_l)
-
-    df['short_term'] = calc_rev(close, low, 3)
-    df['long_term'] = calc_rev(close, low, 21)
-    
-    # 3. brick (红绿柱) - 使用新参数
-    red_long, brick_long = calculate_brick(df)
-    df['red_long'] = red_long
-    
-    # 4. 逻辑判断
-    # 当天白线在黄线上: df['white_line'] > df['yellow_line']
-    # 前一天为红brick: df['red_long'].shift(1) == 1
-    # 前一天long_term > 85: df['long_term'].shift(1) > 85
-    # 当天long_term >= 70: df['long_term'] >= 70
-    # 当天short_term <= 30: df['short_term'] <= 30
-    
-    cond_white_above_yellow = df['white_line'] > df['yellow_line']
-    cond_prev_red_brick = df['red_long'].shift(1) == 1
-    cond_prev_long_term_gt_85 = df['long_term'].shift(1) > 85
-    cond_curr_long_term_ge_70 = df['long_term'] >= 70
-    cond_curr_short_term_le_30 = df['short_term'] <= 30
-
-    df['signal'] = (cond_white_above_yellow & 
-                    cond_prev_red_brick & 
-                    cond_prev_long_term_gt_85 & 
-                    cond_curr_long_term_ge_70 & 
-                    cond_curr_short_term_le_30)
+    # 4. Logic judgment: KDJ J < 13 & Brick Buy Signal
+    df['signal'] = (df['j'] < 13) & df['brick_buy_signal']
     
     return df
 
 def simulate_trade_for_stock(group):
-    # 尾盘买入，次日尾盘卖出
+    # 尾盘买入，最多持有4天，且如果砖型图翻绿就卖出
     signals = group[group['signal'] == True].copy()
     all_trade_daily_rets = []
     all_trade_outcomes = []
@@ -118,21 +111,47 @@ def simulate_trade_for_stock(group):
     
     for idx in signals.index:
         start_pos = group.index.get_loc(idx)
-        # 次日尾盘卖出，所以至少需要 start_pos + 1
         if start_pos + 1 >= len(group): continue
         
         buy_price = group.iloc[start_pos]['close']
+        hold_days = 0
+        exit_pos = start_pos + 1
         
-        exit_price = group.iloc[start_pos + 1]['close']
+        # Hold max 4 days
+        for day in range(1, 5):
+            curr_pos = start_pos + day
+            if curr_pos >= len(group):
+                exit_pos = len(group) - 1
+                break
+            
+            # Condition: If brick turns green (green_bar == 1)
+            if group.iloc[curr_pos]['green_bar'] == 1:
+                exit_pos = curr_pos
+                break
+            
+            # Max hold 4 days
+            if day == 4:
+                exit_pos = curr_pos
+                break
         
-        # 计算单笔交易收益率（限制涨跌停）
-        day_ret = (exit_price / buy_price) - 1
-        day_ret = max(-0.2, min(0.2, day_ret))
+        exit_price = group.iloc[exit_pos]['close']
+        hold_days = exit_pos - start_pos
         
-        # 由于是 T+1 尾盘卖，收益计入次日
-        all_trade_daily_rets.append({'date': group.iloc[start_pos + 1]['date'], 'ret': day_ret})
-        all_trade_outcomes.append(day_ret)
-        trade_durations.append(1)
+        # Calculation: total return for this trade
+        total_ret = (exit_price / buy_price) - 1
+        total_ret = max(-0.2, min(0.2, total_ret))
+        
+        # Every day of holding gets a segment of total_ret for simplicity
+        for d in range(1, hold_days + 1):
+            if start_pos + d < len(group):
+                all_trade_daily_rets.append({
+                    'date': group.iloc[start_pos + d]['date'], 
+                    'start_date': group.iloc[start_pos]['date'], # Signal day for weighting
+                    'ret': total_ret / hold_days 
+                })
+        
+        all_trade_outcomes.append(total_ret)
+        trade_durations.append(hold_days)
                 
     return all_trade_daily_rets, all_trade_outcomes, trade_durations
 
@@ -177,19 +196,20 @@ if __name__ == "__main__":
             print(f"Daily selections saved to {RESULTS_DIR / 'daily_stock_selections.csv'}")
 
         results_df = pd.DataFrame(all_rets)
-        # 统计每日持仓个股数
-        daily_stock_counts = results_df.groupby('date').size()
-        avg_daily_stocks = daily_stock_counts.mean()
         
-        # 统计每日平均收益
-        # 资金分两份仓位（T日1份，T+1日1份），每次买入占用总资金的 1/2
-        # 当天买入的权重是当天选股数量 n 的 1/(2n)
-        # 每天单边换手 50%
-        daily_perf = results_df.groupby('date')['ret'].mean()
+        # 1. Count signals per day for weight allocation (1/4 total daily allocation)
+        daily_signal_counts = signals_df.groupby('date').size().rename('n_start')
         
-        # 策略汇总：由于每天只卖出昨天的 50% 仓位并买入新的 50%
-        # 这里的 daily_perf 是当天持有股票的平均收益，乘以 0.5 权重即为对总资产的贡献
-        strat_returns = daily_perf * 0.5
+        # 2. Merge n_start onto results_df to know how to weight each stock's contribution
+        # We merge on 'start_date' which is the day the signal was generated
+        results_df = results_df.merge(daily_signal_counts, left_on='start_date', right_index=True, how='left')
+        
+        # 3. Calculate daily contribution: ret * (0.25 / n_start)
+        # This assumes each day's selection set gets 1/4 of total capital, split equally among n stocks.
+        results_df['weighted_ret'] = results_df['ret'] * (0.25 / results_df['n_start'])
+        
+        # 4. Aggregate daily returns (sum weighted_ret for each 'date' which is the return date)
+        strat_returns = results_df.groupby('date')['weighted_ret'].sum()
         
         # 获取回测周期内的完整交易日序列
         all_dates = sorted(df['date'].unique())
@@ -198,6 +218,10 @@ if __name__ == "__main__":
         # 计算净值
         net_value = (1 + strat_series).cumprod()
         
+        # 统计每日持仓个股数
+        daily_stock_counts = results_df.groupby('date').size()
+        avg_daily_stocks = daily_stock_counts.mean() if not daily_stock_counts.empty else 0
+
         # 指标计算
         total_ret = net_value.iloc[-1] - 1
         ann_ret = (1 + total_ret)**(252/len(net_value)) - 1
@@ -212,7 +236,7 @@ if __name__ == "__main__":
         
         # 保存指标到表格
         metrics = {
-            "指标名称": ["年化收益", "夏普比率", "最大回撤", "开仓胜率", "平均持股周期", "平均每日选股个数"],
+            "指标名称": ["年化收益", "夏普比率", "最大回撤", "开仓胜率", "平均持股周期", "平均每日持仓个数"],
             "数值": [f"{ann_ret:.2%}", f"{sharpe:.2f}", f"{mdd:.2%}", f"{win_rate:.2%}", f"{avg_hold_days:.2f}天", f"{avg_daily_stocks:.2f}个"]
         }
         metrics_df = pd.DataFrame(metrics)
@@ -225,7 +249,7 @@ if __name__ == "__main__":
         print(f"最大回撤: {mdd:.2%}")
         print(f"开仓胜率: {win_rate:.2%}")
         print(f"平均持股周期: {avg_hold_days:.2f} 天")
-        print(f"平均每日选股个数: {avg_daily_stocks:.2f} 个")
+        print(f"平均每日持仓个数: {avg_daily_stocks:.2f} 个")
         
         # 画图
         plt.figure(figsize=(12, 6))

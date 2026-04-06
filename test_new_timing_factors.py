@@ -64,7 +64,7 @@ def test_new_timing_factors(start_date="2013-01-01", end_date="2025-03-31", T=20
     # operator: 'gt' (大于), 'lt' (小于)
     configs = {
         "price_low_abs": (f_abs_pos, 0.05, 'lt'),              # 处于过去一年15%分位以下的相对低位点
-        "price_near_high": (f_dist_high, -0.01, 'gt'),        # 处于近期高点5%以内的强势调整/突破前夕
+        "price_near_high": (f_dist_high, -0.005, 'gt'),        # 处于近期高点5%以内的强势调整/突破前夕
         "price_rel_ma": (f_price_rel_ma, -2.0, 'lt'),         # 价格向下偏离均线超过1.5倍标准差 (超跌)
         "volume_extreme_dry": (f_vol_dry, 0.75, 'lt'),         # 成交量萎缩至40日平均值的80%以下 (地量)
         "volume_std_score": (f_vol_std, -1.5, 'lt'),          # 成交量低于均值1倍标准差以上 (缩量)

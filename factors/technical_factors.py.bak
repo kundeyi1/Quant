@@ -1,4 +1,4 @@
-try:
+﻿try:
     import talib
 except ImportError:
     talib = None
@@ -9,923 +9,223 @@ from core.NumericalOperators import (
     ts_std_dev, ts_corr, ts_cov, ts_rank, cs_rank, sign
 )
 
-
-class TrendFactors:
-    """
-    趋势性因子类，包含跟随价格趋势的因子
-    """
-    def __dict__(self):
-        return {name: func for name, func in TrendFactors.__dict__.items() if name.startswith('calculate_')}
-    
+class PriceFactors:
     @staticmethod
-    def calculate_ma_arrangement(data, windows=[5, 10, 20, 60]):
-        """
-        多头排列因子
-        逻辑: Sum((MA_short - MA_long) / MA_long) 对于相邻均线对
-        """
-        close = data['close']
-        mas = [talib.SMA(close.values, timeperiod=w) for w in windows]
-        
-        score = 0
-        for i in range(len(mas) - 1):
-            diff = (mas[i] - mas[i+1]) / mas[i+1]
-            score += diff
-            
-        return pd.DataFrame({'ma_arrangement': score}, index=data.index)
-    
-    @staticmethod
-    def calculate_short_term_trend(data, n1=3):
-        """
-        短期趋势因子
-        逻辑: 100 * (Close - LLV(Low, N1)) / (HHV(Close, N1) - LLV(Low, N1))
-        """
-        close = data['close']
-        low = data['low']
-        
-        llv_low = low.rolling(window=n1, min_periods=1).min()
-        hhv_close = close.rolling(window=n1, min_periods=1).max()
-        
-        factor = 100 * (close - llv_low) / (hhv_close - llv_low)
-        return pd.DataFrame({'short_term_trend': factor}, index=data.index)
+    def overhead_supply(data, window=20):
+        high = data["high"]
+        low = data["low"]
+        close = data["close"]
+        volume = data["volume"]
+        range_hl = (high - low).replace(0, np.nan)
+        supply_weight = (high - close) / range_hl
+        supply_vol = volume * supply_weight
+        sum_supply = supply_vol.rolling(window=window, min_periods=1).sum()
+        sum_total = volume.rolling(window=window, min_periods=1).sum()
+        overhead_supply = sum_supply / sum_total
+        return pd.DataFrame({"overhead_supply": overhead_supply}, index=data.index)
 
     @staticmethod
-    def calculate_long_term_trend(data, n2=21):
-        """
-        长期趋势因子
-        逻辑: 100 * (Close - LLV(Low, N2)) / (HHV(Close, N2) - LLV(Low, N2))
-        """
-        close = data['close']
-        low = data['low']
-        
-        llv_low = low.rolling(window=n2, min_periods=1).min()
-        hhv_close = close.rolling(window=n2, min_periods=1).max()
-        
-        factor = 100 * (close - llv_low) / (hhv_close - llv_low)
-        return pd.DataFrame({'long_term_trend': factor}, index=data.index)
+    def price_percentile(data, window=120):
+        percentile = ts_rank(data["close"], window)
+        return pd.DataFrame({"price_percentile": percentile}, index=data.index)
 
     @staticmethod
-    def calculate_yellow_line(data):
-        """
-        多空线 (黄线)
-        逻辑: (MA14 + MA28 + MA57 + MA114) / 4
-        """
-        close = data['close'].values
-        ma14 = talib.SMA(close, 14)
-        ma28 = talib.SMA(close, 28)
-        ma57 = talib.SMA(close, 57)
-        ma114 = talib.SMA(close, 114)
-        zxt_line = (ma14 + ma28 + ma57 + ma114) / 4
-        return pd.DataFrame({'yellow_line': zxt_line}, index=data.index)
-
-    @staticmethod
-    def calculate_white_line(data, period=10):
-        """
-        双重EMA (白线)
-        逻辑: EMA(EMA(Close, 10), 10)
-        """
-        close = data['close'].values
-        ema_1 = talib.EMA(close, timeperiod=period)
-        ema_2 = talib.EMA(ema_1, timeperiod=period)
-        return pd.DataFrame({'white_line': ema_2}, index=data.index)
-
-    @staticmethod
-    def calculate_ma_arrangement(data, windows=[5, 10, 20, 60]):
-        """
-        多头排列因子
-        逻辑: Sum((MA_short - MA_long) / MA_long) 对于相邻均线对
-        """
-        close = data['close']
-        mas = [talib.SMA(close.values, timeperiod=w) for w in windows]
-        
-        score = 0
-        for i in range(len(mas) - 1):
-            diff = (mas[i] - mas[i+1]) / mas[i+1]
-            score += diff
-            
-        return pd.DataFrame({'ma_arrangement': score}, index=data.index)
-
-
-    @staticmethod
-    def calculate_symmetry(data, window_len=50):
-        """
-        计算对称因子 (Symmetry Factor)
-        逻辑:
-        1. 寻找过去50天内的波峰 (最高价)。
-        2. 寻找波峰之后的波谷 (最低价)。
-        3. 计算 Slope1 (波峰 -> 当前) 和 Slope2 (波峰 -> 波谷)。
-        4. Ratio = Slope1 / Slope2。
-        """
-        highs = data['high'].values
-        lows = data['low'].values
-        closes = data['close'].values
-        
-        symmetry = np.full(len(data), np.nan)
-        
-        n = len(data)
-        
-        for i in range(window_len, n):
-            # Window: [i-window_len : i]
-            w_high = highs[i-window_len : i]
-            if len(w_high) < 2: continue
-            
-            # Find Peak
-            peak_offset = np.argmax(w_high)
-            peak_idx = i - window_len + peak_offset
-            
-            # Find Valley AFTER Peak
-            if peak_idx >= i - 1: continue
-            
-            w_low_after = lows[peak_idx+1 : i]
-            if len(w_low_after) == 0: continue
-            
-            valley_offset = np.argmin(w_low_after)
-            valley_idx = peak_idx + 1 + valley_offset
-            
-            P_peak = highs[peak_idx]
-            P_valley = lows[valley_idx]
-            P_curr = closes[i]
-            
-            dist_peak_valley = valley_idx - peak_idx
-            dist_peak_curr = i - peak_idx
-            
-            if dist_peak_valley == 0: continue
-            
-            slope_pv = (P_valley - P_peak) / dist_peak_valley
-            slope_pc = (P_curr - P_peak) / dist_peak_curr
-            
-            if slope_pv == 0: continue
-            
-            ratio = slope_pc / slope_pv
-            symmetry[i] = ratio
-            
-        return pd.DataFrame({'symmetry': symmetry}, index=data.index)
-
-    @staticmethod
-    def calculate_ma_compression(self, data, windows=[10, 20, 50]):
-        """
-        均线压缩因子
-        逻辑: 不同周期均线的离散程度 (均线标准差 / 收盘价)
-        """
-        close = data['close']
-        mas = []
-        for w in windows:
-            mas.append(talib.SMA(close.values, timeperiod=w))
-        
-        mas_df = pd.DataFrame(np.array(mas).T, index=data.index, columns=[f'ma{w}' for w in windows])
-        ma_std = mas_df.std(axis=1)
-        compression = ma_std / close
-        
-        return pd.DataFrame({'ma_compression': compression}, index=data.index)
-
-    @staticmethod
-    def calculate_sma(data, period=14):
-        """
-        简单移动平均线 (SMA)
-        """
-        sma = talib.SMA(data['close'].values, timeperiod=period)
-        return pd.DataFrame({'sma': sma}, index=data.index)
-
-    @staticmethod
-    def calculate_ema(data, period=14):
-        """
-        指数移动平均线 (EMA)
-        """
-        ema = talib.EMA(data['close'].values, timeperiod=period)
-        return pd.DataFrame({'ema': ema}, index=data.index)
-
-    @staticmethod
-    def calculate_wma(data, period=14):
-        """
-        加权移动平均线 (WMA)
-        """
-        wma = talib.WMA(data['close'].values, timeperiod=period)
-        return pd.DataFrame({'wma': wma}, index=data.index)
-
-    @staticmethod
-    def calculate_macd(data, fast=12, slow=26, signal=9):
-        """
-        MACD 指标
-        """
-        macd, macdsignal, macdhist = talib.MACD(data['close'].values, fastperiod=fast, slowperiod=slow, signalperiod=signal)
-        return pd.DataFrame({'macd': macd, 'macd_signal': macdsignal, 'macd_hist': macdhist}, index=data.index)
-
-    @staticmethod
-    def calculate_adx(data, period=14):
-        """
-        平均趋向指数 (ADX)
-        """
-        adx = talib.ADX(data['high'].values, data['low'].values, data['close'].values, timeperiod=period)
-        return pd.DataFrame({'adx': adx}, index=data.index)
-
-    @staticmethod
-    def calculate_parabolic_sar(data, acceleration=0.02, maximum=0.2):
-        """
-        抛物线转向指标 (SAR)
-        """
-        sar = talib.SAR(data['high'].values, data['low'].values, acceleration=acceleration, maximum=maximum)
-        return pd.DataFrame({'parabolic_sar': sar}, index=data.index)
-
-    @staticmethod
-    def calculate_ht_rsrs_norm(data, N=18, M=600):
-        """
-        华泰 RSRS 正态化因子 (阻力支撑相对强度)
-        """
-        from core.NumericalOperators import FactorOperators
-        h = data['high'].values
-        l = data['low'].values
-        beta = FactorOperators.ts_regression_slope_array(l, h, N)
-        beta_series = pd.Series(beta, index=data.index)
-        rolling_mean = beta_series.rolling(window=M, min_periods=M//2).mean()
-        rolling_std = beta_series.rolling(window=M, min_periods=M//2).std()
-        return (beta_series - rolling_mean) / rolling_std
-
-    @staticmethod
-    def calculate_ht_trend_score(data, short_window=5, long_window=60):
-        """
-        华泰趋势打分因子 (双均线多头形态)
-        """
-        close = data['close']
-        ma_s = close.rolling(window=short_window).mean()
-        ma_l = close.rolling(window=long_window).mean()
-        diff = (ma_s / ma_l - 1)
-        vol = close.pct_change().rolling(window=long_window).std()
-        return diff / (vol * np.sqrt(long_window))
-
-    @staticmethod
-    def calculate_new_high_ratio(data, window=20):
-        """
-        创新高天数占比因子
-        逻辑: 过去N日内创N日新高的天数占比
-        """
-        high = data['high']
-        is_new_high = high == high.rolling(window=window).max()
-        return is_new_high.rolling(window=window).mean()
-
-    @staticmethod
-    def calculate_adx(data, window=20):
-        """
-        ADX 平均趋向指数
-        """
-        if talib is None: return pd.Series(np.nan, index=data.index)
-        return pd.Series(talib.ADX(data['high'].values, data['low'].values, data['close'].values, timeperiod=window), index=data.index)
-
-
-class MeanRevertingFactors:
-    """
-    回归型因子类，包含假设价格回归均值的因子
-    """
-    def __dict__(self):
-        return {name: func for name, func in MeanRevertingFactors.__dict__.items() if name.startswith('calculate_')}
-    
-    @staticmethod
-    def calculate_rsi(data, period=14):
-        """
-        相对强弱指数 (RSI)
-        """
-        rsi = talib.RSI(data['close'].values, timeperiod=period)
-        return pd.DataFrame({'rsi': rsi}, index=data.index)
-
-    @staticmethod
-    def calculate_stoch(data, k_period=9, d_period=3):
-        """
-        随机振荡器 (Stochastic Oscillator)
-        """
-        slowk, slowd = talib.STOCH(data['high'].values, data['low'].values, data['close'].values,
-                                   fastk_period=k_period, slowk_period=d_period, slowd_period=d_period)
-        return pd.DataFrame({'stoch_k': slowk, 'stoch_d': slowd}, index=data.index)
-
-    @staticmethod
-    def calculate_kdj(data, k_period=9, d_period=3):
-        """
-        KDJ 指标
-        """
-        k, d = talib.STOCH(data['high'].values, data['low'].values, data['close'].values,
-                        fastk_period=k_period, slowk_period=3, slowk_matype=0,
-                        slowd_period=d_period, slowd_matype=0)
-        j = 3 * k - 2 * d
-        return pd.DataFrame({'kdj_k': k, 'kdj_d': d, 'kdj_j': j}, index=data.index)
-
-    @staticmethod
-    def calculate_williams_r(data, period=14):
-        """
-        威廉指标 (Williams %R)
-        """
-        willr = talib.WILLR(data['high'].values, data['low'].values, data['close'].values, timeperiod=period)
-        return pd.DataFrame({'williams_r': willr}, index=data.index)
-
-    @staticmethod
-    def calculate_cci(data, period=20):
-        """
-        顺势指标 (CCI)
-        """
-        cci = talib.CCI(data['high'].values, data['low'].values, data['close'].values, timeperiod=period)
-        return pd.DataFrame({'cci': cci}, index=data.index)
-
-    @staticmethod
-    def calculate_bollinger_bands(data, period=20, nbdevup=2, nbdevdn=2):
-        """
-        布林带 (Bollinger Bands)
-        """
-        upper, middle, lower = talib.BBANDS(data['close'].values, timeperiod=period, nbdevup=nbdevup, nbdevdn=nbdevdn, matype=0)
-        return pd.DataFrame({'bb_upper': upper, 'bb_middle': middle, 'bb_lower': lower}, index=data.index)
-
-class MomentumFactors:
-    """
-    动量因子类
-    """
-    def __dict__(self):
-        return {name: func for name, func in MomentumFactors.__dict__.items() if name.startswith('calculate_')}
-
-    @staticmethod
-    def calculate_price_bias(data, window=20):
-        """
-        价格乖离率 (Price Bias / Deviation)
-        逻辑: Price / MA(Price, N) - 1
-        """
-        close = data['close']
+    def price_bias(data, window=20):
+        close = data["close"]
         ma = close.rolling(window=window).mean()
         return (close / ma - 1)
 
-    @staticmethod
-    def calculate_bollinger_breakout(data, window=20, nbdev=2):
-        """
-        布林带突破因子
-        逻辑: (Price - Middle) / (Upper - Lower)
-        """
-        if talib is None: return pd.Series(np.nan, index=data.index)
-        upper, middle, lower = talib.BBANDS(data['close'].values, timeperiod=window, nbdevup=nbdev, nbdevdn=nbdev)
-        return pd.Series((data['close'].values - middle) / (upper - lower + 1e-9), index=data.index)
-
-    @staticmethod
-    def calculate_intraday_strength(data):
-        """
-        当日强度因子
-        逻辑: (Return - UpperShadowRatio) * VolumeRatio
-        """
-        close = data['close']
-        high = data['high']
-        volume = data['volume']
-        
-        ret = close.pct_change()
-        upper_shadow_ratio = (high - close) / close.replace(0, np.nan)
-        vol_ma5 = volume.rolling(window=5).mean()
-        vol_ratio = volume / vol_ma5.replace(0, np.nan)
-        
-        strength = (ret - upper_shadow_ratio) * vol_ratio
-        strength = strength.replace([np.inf, -np.inf], np.nan)
-        
-        return pd.DataFrame({'intraday_strength': strength}, index=data.index)
-
-    @staticmethod
-    def calculate_mom_20(data):
-        """
-        20日动量
-        """
-        return MomentumFactors.calculate_mom(data, period=20).rename(columns={'mom': 'mom_20'})
-
-    @staticmethod
-    def calculate_mom_60(data):
-        """
-        60日动量
-        """
-        return MomentumFactors.calculate_mom(data, period=60).rename(columns={'mom': 'mom_60'})
-
-
-    @staticmethod
-    def calculate_pivot_breakout(data):
-        """
-        枢轴点突破因子
-        逻辑: ((Close - R1) / R1) * (Volume / MA_Vol_5), 其中 R1 = 2*P - Low, P = (H+L+2C)/4
-        """
-        high = data['high']
-        low = data['low']
-        close = data['close']
-        volume = data['volume']
-        
-        p = (high + low + 2 * close) / 4
-        r1 = 2 * p - low
-        vol_ma5 = volume.shift(1).rolling(5).mean()
-        vol_ratio = volume / vol_ma5.replace(0, np.nan)
-        breakout_strength = (close - r1) / r1
-        
-        factor = breakout_strength * vol_ratio
-        return pd.DataFrame({'pivot_breakout': factor}, index=data.index)
-
-    @staticmethod
-    def calculate_gx_momentum_factor(data, n=20):
-        """
-        动量因子
-        逻辑: 当日涨跌幅 - 前N日日均涨跌幅
-        Formula: return_0 - mean(return_{-N}...return_{-1})
-        """
-        close = data['close']
-        returns = close.pct_change()
-        
-        # 计算前N日(不包含当日)的日均涨跌幅
-        mean_returns = returns.shift(1).rolling(window=n, min_periods=n).mean()
-        
-        momentum = returns - mean_returns
-        return pd.DataFrame({'momentum_factor': momentum}, index=data.index)
-    
-    
-
-class CycleFactors:
-    """
-    周期因子类
-    """
-    def __dict__(self):
-        return {name: func for name, func in CycleFactors.__dict__.items() if name.startswith('calculate_')}
-
-    @staticmethod
-    def calculate_ht_sine(data):
-        """
-        计算希尔伯特变换正弦波 (Hilbert Transform - SineWave)
-        :param data: pandas DataFrame, 包含 'close' 列
-        :return: SINE, LEADSINE
-        """
-        sine, leadsine = talib.HT_SINE(data['close'].values)
-        return pd.DataFrame({'ht_sine': sine, 'ht_sine_lead': leadsine}, index=data.index)
-
-    @staticmethod
-    def calculate_ht_dcperiod(data):
-        """
-        计算希尔伯特变换主导周期 (Hilbert Transform - Dominant Cycle Period)
-        :param data: pandas DataFrame, 包含 'close' 列
-        :return: HT_DCPERIOD 值
-        """
-        dcperiod = talib.HT_DCPERIOD(data['close'].values)
-        return pd.DataFrame({'ht_dcperiod': dcperiod}, index=data.index)
-
-    @staticmethod
-    def calculate_ht_dcphase(data):
-        """
-        计算希尔伯特变换主导周期相位 (Hilbert Transform - Dominant Cycle Phase)
-        :param data: pandas DataFrame, 包含 'close' 列
-        :return: HT_DCPHASE 值
-        """
-        dcphase = talib.HT_DCPHASE(data['close'].values)
-        return pd.DataFrame({'ht_dcphase': dcphase}, index=data.index)
-
-    @staticmethod
-    def calculate_ht_phasor(data):
-        """
-        计算希尔伯特变换相量分量 (Hilbert Transform - Phasor Components)
-        :param data: pandas DataFrame, 包含 'close' 列
-        :return: inphase, quadrature
-        """
-        inphase, quadrature = talib.HT_PHASOR(data['close'].values)
-        return pd.DataFrame({'ht_phasor_inphase': inphase, 'ht_phasor_quadrature': quadrature}, index=data.index)
-
-    @staticmethod
-    def calculate_ht_trendmode(data):
-        """
-        计算希尔伯特变换趋势与周期模式 (Hilbert Transform - Trend vs Cycle Mode)
-        :param data: pandas DataFrame, 包含 'close' 列
-        :return: HT_TRENDMODE 值
-        """
-        trendmode = talib.HT_TRENDMODE(data['close'].values)
-        return pd.DataFrame({'ht_trendmode': trendmode}, index=data.index)
-
-
 class VolumeFactors:
-    """
-    交易量因子类
-    """
-    def __dict__(self):
-        return {name: func for name, func in VolumeFactors.__dict__.items() if name.startswith('calculate_')}
-
     @staticmethod
-    def calculate_obv(data):
-        """
-        计算能量潮 (On Balance Volume)
-        :param data: pandas DataFrame, 包含 'close', 'volume' 列
-        :return: OBV 值
-        """
-        close = data['close'].astype('float64').values
-        volume = data['volume'].astype('float64').values
+    def obv(data):
+        close = data["close"].astype("float64").values
+        volume = data["volume"].astype("float64").values
         obv = talib.OBV(close, volume)
-        return pd.DataFrame({'obv': obv}, index=data.index)
+        return pd.DataFrame({"obv": obv}, index=data.index)
 
     @staticmethod
-    def calculate_volume_breakout(data, window=120, multiplier=1.5):
-        """
-        计算放量信号
-        定义: 成交量 > x天内的平均值 + n倍标准差
-        :param data: pandas DataFrame, 包含 'volume' 列
-        :param window: int, 回溯周期
-        :param multiplier: float, 标准差倍数
-        :return: DataFrame with 'volume_breakout' (1 for True, 0 for False)
-        """
-        volume = data['volume']
-        vol_ma = volume.rolling(window=window).mean()
-        vol_std = volume.rolling(window=window).std()
-        
-        # 信号判定
-        signal = (volume > (vol_ma + multiplier * vol_std)).astype(int)
-        
-        return pd.DataFrame({'volume_breakout': signal}, index=data.index)
-    
-    @staticmethod
-    def calculate_volume_bias(data, window=20):
-        """
-        成交量乖离率 (Volume Bias)
-        逻辑: Volume / MA(Volume, N) - 1
-        """
-        volume = data['volume']
+    def volume_bias(data, window=20):
+        volume = data["volume"]
         ma = volume.rolling(window=window).mean()
         return (volume / ma - 1)
 
     @staticmethod
-    def calculate_volume_volatility(data, window=60):
-        """
-        成交量波动率 (Volume Volatility)
-        逻辑: Stdev(Volume Change, N)
-        """
-        volume = data['volume']
+    def volume_volatility(data, window=60):
+        volume = data["volume"]
         vol_pct = volume.pct_change()
         return vol_pct.rolling(window=window).std()
 
-
-class PositionFactors:
-    """
-    价格位置类因子
-    """
-    def __dict__(self):
-        return {name: func for name, func in PositionFactors.__dict__.items() if name.startswith('calculate_')}
-
     @staticmethod
-    def calculate_price_percentile(data, window=120):
-        """
-        计算价格在过去x天内的分位点
-        :param data: pandas DataFrame, 包含 'close' 列
-        :param window: int, 回溯周期
-        :return: DataFrame with 'price_percentile'
-        """
-        # 使用 ts_rank 函数计算滚动分位数
-        percentile = ts_rank(data['close'], window)
-        return pd.DataFrame({'price_percentile': percentile}, index=data.index)
-
-class Alpha101Factors:
-    """
-    Alpha101 中仅依赖 open/high/low/close/volume 的子集实现。
-    """
-    SUPPORTED = [
-        'alpha3', 'alpha4', 'alpha6', 'alpha12', 'alpha15', 'alpha16',
-        'alpha20', 'alpha22', 'alpha23', 'alpha24', 'alpha30', 'alpha33',
-        'alpha37', 'alpha38', 'alpha40', 'alpha44', 'alpha45', 'alpha46',
-        'alpha49', 'alpha51', 'alpha53', 'alpha54', 'alpha55'
-    ]
-
-    def __dict__(self):
-        return {name: func for name, func in Alpha101Factors.__dict__.items() if name in self.SUPPORTED}
-
-    @staticmethod
-    def _wrap(series, name):
-        return pd.DataFrame({name: series}, index=series.index)
-
-    @staticmethod
-    def alpha3(data):
-        rank_open = cs_rank(data['open'])
-        rank_volume = cs_rank(data['volume'])
-        result = -ts_corr(rank_open, rank_volume, 10)
-        return Alpha101Factors._wrap(result, 'alpha3')
-
-    @staticmethod
-    def alpha4(data):
-        result = -ts_rank(cs_rank(data['low']), 9)
-        return Alpha101Factors._wrap(result, 'alpha4')
-
-    @staticmethod
-    def alpha6(data):
-        result = -ts_corr(data['open'], data['volume'], 10)
-        return Alpha101Factors._wrap(result, 'alpha6')
-
-    @staticmethod
-    def alpha12(data):
-        result = sign(ts_delta(data['volume'], 1)) * (-ts_delta(data['close'], 1))
-        return Alpha101Factors._wrap(result, 'alpha12')
-
-    @staticmethod
-    def alpha15(data):
-        rank_high = cs_rank(data['high'])
-        rank_volume = cs_rank(data['volume'])
-        corr = ts_corr(rank_high, rank_volume, 3)
-        result = -ts_sum(cs_rank(corr), 3)
-        return Alpha101Factors._wrap(result, 'alpha15')
-
-    @staticmethod
-    def alpha16(data):
-        rank_high = cs_rank(data['high'])
-        rank_volume = cs_rank(data['volume'])
-        cov = ts_cov(rank_high, rank_volume, 5)
-        result = -cs_rank(cov)
-        return Alpha101Factors._wrap(result, 'alpha16')
-
-    @staticmethod
-    def alpha20(data):
-        rank_open_delay_high = cs_rank(data['open'] - ts_delay(data['high'], 1))
-        rank_open_delay_close = cs_rank(data['open'] - ts_delay(data['close'], 1))
-        rank_open_delay_low = cs_rank(data['open'] - ts_delay(data['low'], 1))
-        result = (-rank_open_delay_high) * rank_open_delay_close * rank_open_delay_low
-        return Alpha101Factors._wrap(result, 'alpha20')
-
-    @staticmethod
-    def alpha22(data):
-        corr = ts_corr(data['high'], data['volume'], 5)
-        delta_corr = ts_delta(corr, 5)
-        rank_std = cs_rank(ts_std_dev(data['close'], 20))
-        result = -delta_corr * rank_std
-        return Alpha101Factors._wrap(result, 'alpha22')
-
-    @staticmethod
-    def alpha23(data):
-        avg_high_20 = ts_sum(data['high'], 20) / 20.0
-        delta_high_2 = ts_delta(data['high'], 2)
-        result = pd.Series(
-            np.where(avg_high_20 < data['high'], -delta_high_2, 0.0), index=data.index
-        )
-        return Alpha101Factors._wrap(result, 'alpha23')
-
-    @staticmethod
-    def alpha24(data):
-        avg_close_100 = ts_sum(data['close'], 100) / 100.0
-        delayed_close_100 = ts_delay(data['close'], 100)
-        ratio = ts_delta(avg_close_100, 100) / delayed_close_100.replace(0, np.nan)
-        cond = ratio <= 0.05
-        part_true = -(data['close'] - ts_min(data['close'], 100))
-        part_false = -ts_delta(data['close'], 3)
-        result = pd.Series(np.where(cond, part_true, part_false), index=data.index)
-        return Alpha101Factors._wrap(result, 'alpha24')
-
-    @staticmethod
-    def alpha30(data):
-        c0 = data['close']
-        s1 = sign(c0 - ts_delay(c0, 1))
-        s2 = sign(ts_delay(c0, 1) - ts_delay(c0, 2))
-        s3 = sign(ts_delay(c0, 2) - ts_delay(c0, 3))
-        rank_sign_sum = cs_rank(s1 + s2 + s3)
-        numerator = (1.0 - rank_sign_sum) * ts_sum(data['volume'], 5)
-        denominator = ts_sum(data['volume'], 20).replace(0, np.nan)
-        result = numerator / denominator
-        return Alpha101Factors._wrap(result, 'alpha30')
-
-    @staticmethod
-    def alpha33(data):
-        value = -(1 - (data['open'] / data['close']))
-        result = cs_rank(value)
-        return Alpha101Factors._wrap(result, 'alpha33')
-
-    @staticmethod
-    def alpha37(data):
-        delayed_diff = ts_delay(data['open'] - data['close'], 1)
-        corr = ts_corr(delayed_diff, data['close'], 200)
-        result = cs_rank(corr) + cs_rank(data['open'] - data['close'])
-        return Alpha101Factors._wrap(result, 'alpha37')
-
-    @staticmethod
-    def alpha38(data):
-        result = -cs_rank(ts_rank(data['close'], 10)) * cs_rank(data['close'] / data['open'])
-        return Alpha101Factors._wrap(result, 'alpha38')
-
-    @staticmethod
-    def alpha40(data):
-        neg_rank_std = -cs_rank(ts_std_dev(data['high'], 10))
-        corr = ts_corr(data['high'], data['volume'], 10)
-        result = neg_rank_std * corr
-        return Alpha101Factors._wrap(result, 'alpha40')
-
-    @staticmethod
-    def alpha44(data):
-        result = -ts_corr(data['high'], cs_rank(data['volume']), 5)
-        return Alpha101Factors._wrap(result, 'alpha44')
-
-    @staticmethod
-    def alpha45(data):
-        delayed_close = ts_delay(data['close'], 5)
-        avg_delayed = ts_sum(delayed_close, 20) / 20.0
-        rank_avg_delayed = cs_rank(avg_delayed)
-        corr_close_vol = ts_corr(data['close'], data['volume'], 2)
-        sum_close_5 = ts_sum(data['close'], 5)
-        sum_close_20 = ts_sum(data['close'], 20)
-        corr_sums = ts_corr(sum_close_5, sum_close_20, 2)
-        rank_corr_sums = cs_rank(corr_sums)
-        result = -(rank_avg_delayed * corr_close_vol) * rank_corr_sums
-        return Alpha101Factors._wrap(result, 'alpha45')
-
-    @staticmethod
-    def alpha46(data):
-        close = data['close']
-        slope1 = (ts_delay(close, 20) - ts_delay(close, 10)) / 10.0
-        slope2 = (ts_delay(close, 10) - close) / 10.0
-        diff = slope1 - slope2
-        fallback = -(close - ts_delay(close, 1))
-        result = pd.Series(
-            np.where(diff < -0.1, 1.0, np.where(diff < 0, 1.0, fallback)), index=close.index
-        )
-        return Alpha101Factors._wrap(result, 'alpha46')
-
-    @staticmethod
-    def alpha49(data):
-        close = data['close']
-        slope1 = (ts_delay(close, 20) - ts_delay(close, 10)) / 10.0
-        slope2 = (ts_delay(close, 10) - close) / 10.0
-        diff = slope1 - slope2
-        fallback = -(close - ts_delay(close, 1))
-        result = pd.Series(np.where(diff < -0.1, 1.0, fallback), index=close.index)
-        return Alpha101Factors._wrap(result, 'alpha49')
-
-    @staticmethod
-    def alpha51(data):
-        close = data['close']
-        slope1 = (ts_delay(close, 20) - ts_delay(close, 10)) / 10.0
-        slope2 = (ts_delay(close, 10) - close) / 10.0
-        diff = slope1 - slope2
-        fallback = -(close - ts_delay(close, 1))
-        result = pd.Series(np.where(diff < -0.05, 1.0, fallback), index=close.index)
-        return Alpha101Factors._wrap(result, 'alpha51')
-
-    @staticmethod
-    def alpha53(data):
-        numerator = (data['close'] - data['low']) - (data['high'] - data['close'])
-        denominator = (data['close'] - data['low']).replace(0, np.nan)
-        ratio = numerator / denominator
-        result = -ts_delta(ratio, 9)
-        return Alpha101Factors._wrap(result, 'alpha53')
-
-    @staticmethod
-    def alpha54(data):
-        numerator = -1 * (data['low'] - data['close']) * (data['open'] ** 5)
-        denominator = ((data['low'] - data['high']) * (data['close'] ** 5)).replace(0, np.nan)
-        result = numerator / denominator
-        return Alpha101Factors._wrap(result, 'alpha54')
-
-    @staticmethod
-    def alpha55(data):
-        min_low = ts_min(data['low'], 12)
-        max_high = ts_max(data['high'], 12)
-        range_hl = (max_high - min_low).replace(0, np.nan)
-        normalized = (data['close'] - min_low) / range_hl
-        rank_norm = cs_rank(normalized)
-        rank_vol = cs_rank(data['volume'])
-        result = -ts_corr(rank_norm, rank_vol, 6)
-        return Alpha101Factors._wrap(result, 'alpha55')
-
-class RiskFactors:
-    """
-    风险因子类
-    """
-    def __dict__(self):
-        return {name: func for name, func in RiskFactors.__dict__.items() if name.startswith('calculate_')}
-
-    @staticmethod
-    def calculate_high_pos_vol_risk(data, window=120, multiplier=1.5, percentile_threshold=0.9):
-        """
-        高位放量风险因子
-        逻辑: 价格高位 (>= threshold) AND 巨量 (Vol > MA + n*Std) AND 阴线 (Close < Open)
-        """
-        price_pos = ts_rank(data['close'], window)
-        is_high_pos = price_pos >= percentile_threshold
-        
-        volume = data['volume']
+    def volume_breakout(data, window=120, multiplier=1.5):
+        volume = data["volume"]
         vol_ma = volume.rolling(window=window).mean()
         vol_std = volume.rolling(window=window).std()
-        is_high_vol = volume > (vol_ma + multiplier * vol_std)
-        
-        is_bearish = data['close'] < data['open']
-        risk_signal = (is_high_pos & is_high_vol & is_bearish).astype(int)
-        
-        return pd.DataFrame({'high_pos_vol_risk': risk_signal}, index=data.index)
-    
-    @staticmethod
-    def calculate_overhead_supply(data, window=20):
-        """
-        上方供给因子 (Overhead Supply)
-        逻辑: 滚动窗口内 (High - Close) / (High - Low) * Volume 的累加占比
-        """
-        high = data['high']
-        low = data['low']
-        close = data['close']
-        volume = data['volume']
-        
-        range_hl = (high - low).replace(0, np.nan)
-        supply_weight = (high - close) / range_hl
-        supply_vol = volume * supply_weight
-        
-        sum_supply = supply_vol.rolling(window=window, min_periods=1).sum()
-        sum_total = volume.rolling(window=window, min_periods=1).sum()
-        
-        overhead_supply = sum_supply / sum_total
-        return pd.DataFrame({'overhead_supply': overhead_supply}, index=data.index)
+        signal = (volume > (vol_ma + multiplier * vol_std)).astype(int)
+        return pd.DataFrame({"volume_breakout": signal}, index=data.index)
 
     @staticmethod
-    def calculate_gx_atr_factor(data, n=60):
-        """
-        根据特定公式计算相对真实波幅因子 (GX ATR)
-        TR_t = max((Ht-Lt)/Ct-1, abs(Ht-Ct-1)/Ct-1, abs(Ct-1-Lt)/Ct-1)
-        ATR_60,t = Sum(TR_t-i, i=0 to 59)
-        """
-        high = data['high']
-        low = data['low']
-        close = data['close']
-        prev_close = close.shift(1).replace(0, np.nan)
-        
-        tr_1 = (high - low) / prev_close
-        tr_2 = (high - prev_close).abs() / prev_close
-        tr_3 = (prev_close - low).abs() / prev_close
-        
-        tr_t = pd.concat([tr_1, tr_2, tr_3], axis=1).max(axis=1)
+    def intraday_strength(data):
+        close = data["close"]
+        high = data["high"]
+        volume = data["volume"]
+        ret = close.pct_change()
+        upper_shadow_ratio = (high - close) / close.replace(0, np.nan)
+        vol_ma5 = volume.rolling(window=5).mean()
+        vol_ratio = volume / vol_ma5.replace(0, np.nan)
+        strength = (ret - upper_shadow_ratio) * vol_ratio
+        strength = strength.replace([np.inf, -np.inf], np.nan)
+        return pd.DataFrame({"intraday_strength": strength}, index=data.index)
 
-        atr_n = tr_t.rolling(window=n, min_periods=1).mean()
-        
-        return pd.DataFrame({f'atr_{n}': atr_n}, index=data.index)
-
-class HotspotFactors:
-    """
-    热点因子类 - 基于 SmoothReturn 逻辑
-    """
-    def __dict__(self):
-        return {name: func for name, func in HotspotFactors.__dict__.items() if name.startswith('calculate_')}
+class TrendFactors:
+    @staticmethod
+    def symmetry(data, window_len=50):
+        highs, lows, closes = data["high"].values, data["low"].values, data["close"].values
+        symmetry = np.full(len(data), np.nan)
+        for i in range(window_len, len(data)):
+            w_high = highs[i-window_len : i]
+            if len(w_high) < 2: continue
+            peak_offset = np.argmax(w_high)
+            peak_idx = i - window_len + peak_offset
+            if peak_idx >= i - 1: continue
+            w_low_after = lows[peak_idx+1 : i]
+            if len(w_low_after) == 0: continue
+            valley_offset = np.argmin(w_low_after)
+            valley_idx = peak_idx + 1 + valley_offset
+            P_peak, P_valley, P_curr = highs[peak_idx], lows[valley_idx], closes[i]
+            dist_pv, dist_pc = valley_idx - peak_idx, i - peak_idx
+            if dist_pv == 0: continue
+            slope_pv, slope_pc = (P_valley - P_peak) / dist_pv, (P_curr - P_peak) / dist_pc
+            if slope_pv == 0: continue
+            symmetry[i] = slope_pc / slope_pv
+        return pd.DataFrame({"symmetry": symmetry}, index=data.index)
 
     @staticmethod
-    def calculate_gx_hotspot(data, window_len=120, drawdown_th=0.10):
-        """
-        GX_hotspot 因子 (SmoothReturn)
-        逻辑:
-        1. 寻找最近发酵点 (回撤 > threshold)。
-        2. 计算从发酵点至今的方向强度 Score_raw = Sum(r) / Sum(|r|)。
-        """
-        if 'close' not in data.columns or 'volume' not in data.columns:
-            raise ValueError("Input data must contain 'close' and 'volume' columns")
-            
-        if isinstance(data.index, pd.MultiIndex):
-            close = data['close'].unstack()
-            volume = data['volume'].unstack()
-        else:
-            close = data['close']
-            volume = data['volume']
-            
-        if isinstance(close, pd.Series):
-            close = close.to_frame()
-            volume = volume.to_frame()
+    def ma_compression(data, windows=[10, 20, 50]):
+        close = data["close"]
+        mas = [talib.SMA(close.values, timeperiod=w) for w in windows]
+        mas_df = pd.DataFrame(np.array(mas).T, index=data.index)
+        compression = mas_df.std(axis=1) / close
+        return pd.DataFrame({"ma_compression": compression}, index=data.index)
 
-        returns = close.pct_change()
-        final_results = {}
+    @staticmethod
+    def yellow_line(data):
+        c = data["close"].values
+        zxt = (talib.SMA(c, 14) + talib.SMA(c, 28) + talib.SMA(c, 57) + talib.SMA(c, 114)) / 4
+        return pd.DataFrame({"yellow_line": zxt}, index=data.index)
 
-        for col in close.columns:
-            prices = close[col]
-            rets = returns[col]
-            
-            n = len(prices)
-            gx_hotspot_values = np.full(n, np.nan)
-            
-            last_ferment_idx = -1
-            
-            price_vals = prices.values
-            ret_vals = rets.values
-            
-            for t in range(1, n):
-                lookback_start = max(0, t - window_len)
-                hist_max = np.max(price_vals[lookback_start:t])
-                current_dd = price_vals[t] / hist_max - 1
-                
-                if current_dd <= -drawdown_th:
-                    last_ferment_idx = t
-                
-                if last_ferment_idx == -1 or t >= last_ferment_idx + 6:
-                    ferment_idx = last_ferment_idx
+    @staticmethod
+    def white_line(data, period=10):
+        c = data["close"].values
+        ema2 = talib.EMA(talib.EMA(c, timeperiod=period), timeperiod=period)
+        return pd.DataFrame({"white_line": ema2}, index=data.index)
 
-                else:
-                    continue
-                
-                # 当天的信号计算不应看到当天的结果
-                window_rets = ret_vals[ferment_idx : t]
-                mask = ~np.isnan(window_rets) & ~np.isnan(window_vols)
-                window_rets = window_rets[mask]
-                window_vols = window_vols[mask]
-                
-                if len(window_rets) > 0:
-                    weighted_sum_r = np.sum(window_rets)
-                    weighted_sum_abs_r = np.sum(np.abs(window_rets))
-                    
-                    
-                    if weighted_sum_abs_r != 0:
-                        score_raw = weighted_sum_r / weighted_sum_abs_r
-                        gx_hotspot_values[t] = score_raw
+    @staticmethod
+    def sma(data, period=14):
+        return pd.DataFrame({"sma": talib.SMA(data["close"].values, timeperiod=period)}, index=data.index)
 
-            final_results[col] = pd.Series(gx_hotspot_values).values
+    @staticmethod
+    def ema(data, period=14):
+        return pd.DataFrame({"ema": talib.EMA(data["close"].values, timeperiod=period)}, index=data.index)
 
-        # 转换格式
-        if isinstance(data.index, pd.MultiIndex):
-            stacked_res = pd.DataFrame(final_results, index=close.index).stack()
-            # 确保 index 与输入 data 的 index 对齐
-            return pd.DataFrame({'gx_hotspot': stacked_res}, index=data.index)
-        else:
-            # 处理单序列
-            if len(final_results) == 1:
-                col_name = list(final_results.keys())[0]
-                return pd.DataFrame(final_results[col_name], columns=['gx_hotspot'], index=close.index)
-            return pd.DataFrame(final_results, index=close.index)
+    @staticmethod
+    def wma(data, period=14):
+        return pd.DataFrame({"wma": talib.WMA(data["close"].values, timeperiod=period)}, index=data.index)
 
+    @staticmethod
+    def ma_arrangement(data, windows=[5, 10, 20, 60]):
+        close = data["close"]
+        mas = [talib.SMA(close.values, timeperiod=w) for w in windows]
+        score = sum((mas[i] - mas[i+1]) / mas[i+1] for i in range(len(mas) - 1))
+        return pd.DataFrame({"ma_arrangement": score}, index=data.index)
 
+    @staticmethod
+    def macd(data, fast=12, slow=26, signal=9):
+        macd, s, h = talib.MACD(data["close"].values, fast, slow, signal)
+        return pd.DataFrame({"macd": macd, "macd_signal": s, "macd_hist": h}, index=data.index)
 
+    @staticmethod
+    def sar(data, acc=0.02, max=0.2):
+        return pd.DataFrame({"sar": talib.SAR(data["high"].values, data["low"].values, acc, max)}, index=data.index)
+
+    @staticmethod
+    def adx(data, period=14):
+        return pd.Series(talib.ADX(data["high"].values, data["low"].values, data["close"].values, period), index=data.index)
+
+    @staticmethod
+    def rsrs_norm(data, N=18, M=600):
+        from core.NumericalOperators import FactorOperators
+        beta = pd.Series(FactorOperators.ts_regression_slope_array(data["low"].values, data["high"].values, N), index=data.index)
+        return (beta - beta.rolling(M, min_periods=M//2).mean()) / beta.rolling(M, min_periods=M//2).std()
+
+    @staticmethod
+    def short_term_trend(data, n1=3):
+        c, l = data["close"], data["low"]
+        f = 100 * (c - l.rolling(n1, min_periods=1).min()) / (c.rolling(n1, min_periods=1).max() - l.rolling(n1, min_periods=1).min())
+        return pd.DataFrame({"short_term_trend": f}, index=data.index)
+
+    @staticmethod
+    def long_term_trend(data, n2=21):
+        c, l = data["close"], data["low"]
+        f = 100 * (c - l.rolling(n2, min_periods=1).min()) / (c.rolling(n2, min_periods=1).max() - l.rolling(n2, min_periods=1).min())
+        return pd.DataFrame({"long_term_trend": f}, index=data.index)
+
+    @staticmethod
+    def ht_trend_score(data, s=5, l=60):
+        c = data["close"]
+        diff = (c.rolling(s).mean() / c.rolling(l).mean() - 1)
+        vol = c.pct_change().rolling(l).std()
+        return diff / (vol * np.sqrt(l))
+
+class VolatilityFactors:
+    @staticmethod
+    def bollinger_bands(data, p=20, u=2, d=2):
+        up, mid, low = talib.BBANDS(data["close"].values, p, u, d, 0)
+        return pd.DataFrame({"bb_upper": up, "bb_middle": mid, "bb_lower": low}, index=data.index)
+
+    @staticmethod
+    def bollinger_breakout(data, w=20, d=2):
+        up, mid, low = talib.BBANDS(data["close"].values, w, d, d)
+        return pd.Series((data["close"].values - mid) / (up - low + 1e-9), index=data.index)
+
+    @staticmethod
+    def gx_atr_factor(data, n=60):
+        p_close = data["close"].shift(1).replace(0, np.nan)
+        tr = pd.concat([(data["high"]-data["low"])/p_close, (data["high"]-p_close).abs()/p_close, (p_close-data["low"]).abs()/p_close], axis=1).max(axis=1)
+        return pd.DataFrame({f"atr_{n}": tr.rolling(n, min_periods=1).mean()}, index=data.index)
+
+class CrowdingFactors:
+    @staticmethod
+    def high_pos_vol_risk(data, w=120, m=1.5, t=0.9):
+        is_hp = ts_rank(data["close"], w) >= t
+        v = data["volume"]
+        is_hv = v > (v.rolling(w).mean() + m * v.rolling(w).std())
+        s = (is_hp & is_hv & (data["close"] < data["open"])).astype(int)
+        return pd.DataFrame({"high_pos_vol_risk": s}, index=data.index)
+
+    @staticmethod
+    def gx_hotspot(data, w=120, d=0.10):
+        c, v, r = data["close"], data["volume"], data["close"].pct_change()
+        res = np.full(len(c), np.nan)
+        lfi = -1
+        cv, rv = c.values, r.values
+        for t in range(1, len(c)):
+            if cv[t] / np.max(cv[max(0, t-w):t]) - 1 <= -d: lfi = t
+            if lfi != -1 and t >= lfi + 6:
+                wr = rv[lfi : t]
+                if len(wr) > 0 and np.sum(np.abs(wr)) != 0: res[t] = np.sum(wr) / np.sum(np.abs(wr))
+        return pd.DataFrame({"gx_hotspot": res}, index=data.index)
+
+class Alpha101Factors:
+    @staticmethod
+    def alpha3(data): return pd.DataFrame({"alpha3": -ts_corr(cs_rank(data["open"]), cs_rank(data["volume"]), 10)}, index=data.index)
+    @staticmethod
+    def alpha4(data): return pd.DataFrame({"alpha4": -ts_rank(cs_rank(data["low"]), 9)}, index=data.index)
+    @staticmethod
+    def alpha6(data): return pd.DataFrame({"alpha6": -ts_corr(data["open"], data["volume"], 10)}, index=data.index)
+    @staticmethod
+    def alpha12(data): return pd.DataFrame({"alpha12": sign(ts_delta(data["volume"], 1)) * (-ts_delta(data["close"], 1))}, index=data.index)
+    @staticmethod
+    def alpha15(data): return pd.DataFrame({"alpha15": -ts_sum(cs_rank(ts_corr(cs_rank(data["high"]), cs_rank(data["volume"]), 3)), 3)}, index=data.index)
+    @staticmethod
+    def alpha16(data): return pd.DataFrame({"alpha16": -cs_rank(ts_cov(cs_rank(data["high"]), cs_rank(data["volume"]), 5))}, index=data.index)
 

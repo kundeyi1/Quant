@@ -14,12 +14,26 @@ TBD - created by archiving change sparse-rebound-momentum-test. Update Purpose a
 - **WHEN** 从外部加载以 `.parquet` 格式存储的稀疏因子时
 - **THEN** 系统 SHALL 严格保留原始 `NaN` 分数，不得将其误识别为 `0` 或进行任何自动填补。
 
+### Requirement: Sparse Signal Handling and Input Restraints
+The `SparseSignalTester` SHALL focus primarily on analyzing cross-sectional quantile distributions or raw continuous scalar outputs, evaluating numerical correlations with future returns across `n_groups`.
+
+#### Scenario: Sparse Signal Separation
+- **WHEN** the `SparseSignalTester` encounters continuous distributions or ranked factor vectors
+- **THEN** it MUST perform standard rank-based slicing or numerical correlation checks instead of drawing net-liquidations for 0/1 discrete sequences.
+
 ### Requirement: 使用 SparseSignalTester 执行回测评估
 系统 MUST 支持以生成的信号 DataFrame 输入给现有的 `core/SparseSignalTester.py` 进行信号触发回测，而不需要也不使用之前独立在 `quant_timing_system` 中分离实现的回溯循环代码。
 
 #### Scenario: 执行稀疏时间轴回测
 - **WHEN** `run_huatai_timing_reproduction.py` 传入生成的华泰综合打分信号向量并执行 `SparseSignalTester.backtest()`（或相关功能函数）时
 - **THEN** 系统正常运算，考虑稀疏离散的入场/出场或多空信号状态，统计出回测的核心业务绩效（多头年化、空头表现、最大回撤等），且无执行崩溃。
+
+### Requirement: Default Directory Handling
+The `SparseSignalTester` MUST default its `output_dir` property or default behaviors to store standard numerical factor evaluation checks into `results/sparse_signal` instead of generic `results/`.
+
+#### Scenario: Verify factor evaluation output location
+- **WHEN** the user calls `tester.run_timing_analysis(period=20)` on numerical vectors
+- **THEN** the plots (e.g. `timing_effectiveness_dist.png`) are saved safely within `results/sparse_signal/` unless an override is provided.
 
 ### Requirement: Wind 格式索引文件读取
 系统必须（SHALL）能够读取位于 `D:/DATA/INDEX/ZX/ZX_YJHY.csv` 的中信一级行业指数，该文件采用 Wind 导出格式。读取时系统 MUST 使用 `core.DataManager` 的 Wind 解析器或等效接口将原始字段映射到统一的 OHLCV 列 (`open, high, low, close, volume`) 并以日期为索引返回。
@@ -84,6 +98,13 @@ The testing engine SHALL provide a comprehensive view of factor performance, inc
 - **WHEN** 历史上一共出现了 10 次反弹触发信号。
 - **THEN** 系统必须输出各分组在 10 次事件中的平均表现，并生成包含累计收益曲线（多头对比空头或基准）的可视化报告。
 
+### Requirement: Multi-strategy execution framework
+系统必须（SHALL）允许在单个运行入口（`gx_pit_mom.py`）中配置并运行多个 PIT 动量信号组合。
+
+#### Scenario: Run all signals with ejhy
+- **WHEN** 用户在 `gx_pit_mom.py` 中选择运行 `['breakout', 'rebound', 'rotation']` 且行业设定为 `ejhy`
+- **THEN** 系统按序处理三种信号的择时计算与稀疏因子测试
+
 ### Requirement: 独立择时分析接口
 系统必须（SHALL）提供独立的公有方法，接受基准序列（如 `000985.CSI`）和持有期，返回择时显著性统计汇报。
 
@@ -97,4 +118,18 @@ The testing engine SHALL provide a comprehensive view of factor performance, inc
 #### Scenario: 分布对比图表绘制
 - **WHEN** 调用 `SparseSignalTester` 的择时分析接口。
 - **THEN** 生成一张分布密度图，展示信号触发收益在 `000985.CSI` 全样本分布中的相对位置（Quantile Rank）。
+
+### Requirement: Sparse Signal Day Momentum Alignment
+The system MUST allow using the historical return of assets on the EXACT date of the timing trigger as the cross-sectional momentum metric.
+
+#### Scenario: Signal Day Weight Assignment
+- **WHEN** a timing trigger is identified on date T
+- **THEN** the sector rotation engine SHALL extract the daily returns of all industries on date T and use them for rank-based grouping (Long/Short)
+
+### Requirement: Standardized Performance Export
+The system SHALL automate the generation of evaluation reports for sparse timing-momentum signals.
+
+#### Scenario: Report Generation in results/timing
+- **WHEN** the backtest is complete
+- **THEN** it SHALL export a CSV summary and a dual-axis NAV/Drawdown chart to the specified directory
 

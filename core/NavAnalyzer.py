@@ -171,15 +171,19 @@ class Visualizer:
         if stats:
             ann_ret, vol, sr, mdd = stats
             text = (f"年化收益: {ann_ret:.2f}%\n波动率: {vol:.2f}%\n夏普比: {sr:.2f}\n最大回撤: {mdd:.2f}%")
-            ax1.text(0.01, 0.97, text, transform=ax1.transAxes, va='top', 
-                    bbox=dict(facecolor='white', alpha=0.8), fontsize=9)
+            # 绩效统计放在图例下方一点
+            ax1.text(0.01, 0.68, text, transform=ax1.transAxes, va='top', 
+                    bbox=dict(facecolor='white', alpha=0.9, edgecolor='gray', boxstyle='round,pad=0.5'), 
+                    fontsize=9, zorder=5)
         
         plt.title(title)
         
-        # 合并图例
+        # 合并所有标签
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', frameon=True, framealpha=0.8)
+        # 将曲线说明(图例)放在上方，并整体下移到 y=0.8 附近，防止挡住顶部的回撤阴影
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', bbox_to_anchor=(0.01, 0.82), 
+                   frameon=True, framealpha=0.9, fontsize=9)
         
         if output_path:
             plt.savefig(output_path, bbox_inches='tight')

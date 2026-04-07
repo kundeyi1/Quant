@@ -1,5 +1,5 @@
-﻿import talib
 import numpy as np
+import talib
 import pandas as pd
 from core.NumericalOperators import (
     ts_delay, ts_delta, ts_sum, ts_min, ts_max,
@@ -56,7 +56,7 @@ class PriceFactors:
         return pd.DataFrame({"overhead_supply": overhead_supply}, index=data.index)
 
     @staticmethod
-    def price_bias(data, window=20):
+    def ice_bias(data, window=20):
         """
         价格乖离率 (Price Bias / Deviation)
         逻辑: Price / MA(Price, N) - 1
@@ -65,14 +65,54 @@ class PriceFactors:
         ma = close.rolling(window=window).mean()
         return (close / ma - 1)
 
+    @staticmethod
+    def pullback_depth(data, window=20):
+        """
+        回调深度 (Pullback Depth)
+        逻辑: (rolling_max_20 - close) / rolling_max_20
+        """
+        hhv = data["high"].rolling(window=window).max()
+        depth = (hhv - data["close"]) / (hhv + 1e-9)
+        return pd.DataFrame({"pullback_depth": depth}, index=data.index)
+
+    @staticmethod
+    def position(data, window=60):
+        """
+        结构位置 (Position)
+        逻辑: (close - rolling_min_60) / (rolling_max_60 - rolling_min_60)
+        """
+        llv = data["low"].rolling(window=window).min()
+        hhv = data["high"].rolling(window=window).max()
+        pos = (data["close"] - llv) / (hhv - llv + 1e-9)
+        return pd.DataFrame({"position": pos}, index=data.index)
+
+    @staticmethod
+    def momentum_acceleration(data, window=5):
+        """
+        动量加速度 (Momentum Acceleration)
+        逻辑: return_today - mean(return_last_5)
+        """
+        ret = data["close"].pct_change()
+        mean_ret = ret.rolling(window=window).mean().shift(1) # 排除今日
+        acc = ret - mean_ret
+        return pd.DataFrame({"momentum_acceleration": acc}, index=data.index)
+
+    @staticmethod
+    def body_strength(data):
+        """
+        K线实体强度 (Body Strength)
+        逻辑: abs(close-open)/(high-low)
+        """
+        body = (data["close"] - data["open"]).abs()
+        range_hl = (data["high"] - data["low"])
+        strength = body / (range_hl + 1e-9)
+        return pd.DataFrame({"body_strength": strength}, index=data.index)
+
 
 class VolumeFactors:
     """
     交易量因子类
     """
-    def __dict__(self):
-        return {name: func for name, func in VolumeFactors.__dict__.items() if name.startswith('calculate_')}
-
     @staticmethod
     def obv(data):
         """
@@ -98,6 +138,16 @@ class VolumeFactors:
         return pd.DataFrame({"volume_abs_dryness": dryness_ratio}, index=data.index)
 
     @staticmethod
+    def volume_ratio(data, short_window=5, long_window=20):
+        """
+        成交量收缩比 (Volume Ratio)
+        逻辑: mean(volume, 5) / mean(volume, 20)
+        """
+        v_short = data["volume"].rolling(window=short_window).mean()
+        v_long = data["volume"].rolling(window=long_window).mean()
+        return pd.DataFrame({"volume_ratio": v_short / (v_long + 1e-9)}, index=data.index)
+
+    @staticmethod
     def volume_yes_rel_dryness(data, window=5):
         """
         相对缩量比例 (Yesterday's Relative Volume Dryness)
@@ -120,6 +170,14 @@ class VolumeFactors:
         std = volume.rolling(window=window).std()
         v_score = (volume - ma) / (std + 1e-9)
         return pd.DataFrame({"volume_std_score": v_score}, index=data.index)
+
+    @staticmethod
+    def volume_zscore(data, window=20):
+        """
+        成交量 Z-Score (Volume Z-Score)
+        逻辑: 同 volume_std_score，用于 b2_alpha
+        """
+        return VolumeFactors.volume_std_bias(data, window).rename(columns={"volume_std_score": "volume_zscore"})
 
     @staticmethod
     def volume_volatility(data, window=60):
@@ -147,8 +205,19 @@ class VolumeFactors:
         
         # 信号判定
         signal = (volume > (vol_ma + multiplier * vol_std)).astype(int)
-        
         return pd.DataFrame({"volume_breakout": signal}, index=data.index)
+
+    @staticmethod
+    def up_volume_ratio(data, window=20):
+        """
+        上涨成交量占比 (Up Volume Ratio)
+        逻辑: up_volume / total_volume
+        """
+        is_up = (data["close"] > data["close"].shift(1)).astype(int)
+        up_vol = data["volume"] * is_up
+        sum_up_vol = up_vol.rolling(window=window).sum()
+        sum_total_vol = data["volume"].rolling(window=window).sum()
+        return pd.DataFrame({"up_volume_ratio": sum_up_vol / (sum_total_vol + 1e-9)}, index=data.index)
 
     @staticmethod
     def intraday_strength(data):
@@ -170,13 +239,11 @@ class VolumeFactors:
         
         return pd.DataFrame({"intraday_strength": strength}, index=data.index)
 
+
 class TrendFactors:
     """
     趋势性因子类，包含跟随价格趋势的因子
     """
-    def __dict__(self):
-        return {name: func for name, func in TrendFactors.__dict__.items() if name.startswith('calculate_')}
-
     @staticmethod
     def symmetry(data, window_len=50):
         """
@@ -381,6 +448,53 @@ class TrendFactors:
         vol = c.pct_change().rolling(l).std()
         return diff / (vol * np.sqrt(l))
 
+    @staticmethod
+    def trend_strength(data, window=60):
+        """
+        趋势强度 (Trend Strength)
+        逻辑: (Close - MA60) / MA60
+        """
+        close = data["close"]
+        ma = close.rolling(window=window).mean()
+        return pd.DataFrame({"trend_strength": (close / ma - 1)}, index=data.index)
+
+    @staticmethod
+    def trend_slope(data, window=20):
+        """
+        趋势斜率 (Trend Slope)
+        逻辑: slope(MA20)
+        计算 MA20 的变动率或线性回归斜率
+        """
+        ma = data["close"].rolling(window=window).mean()
+        slope = (ma - ma.shift(1)) / (ma.shift(1) + 1e-9)
+        return pd.DataFrame({"trend_slope": slope}, index=data.index)
+
+    @staticmethod
+    def ma_structure(data, short_window=20, long_window=60):
+        """
+        均线结构 (MA Structure)
+        逻辑: (MA20 - MA60) / MA60
+        """
+        close = data["close"]
+        ma_short = close.rolling(window=short_window).mean()
+        ma_long = close.rolling(window=long_window).mean()
+        return pd.DataFrame({"ma_structure": (ma_short / ma_long - 1)}, index=data.index)
+
+    @staticmethod
+    def supply_pressure(data, window=20):
+        """
+        筹码压力 (Supply Pressure)
+        逻辑: volume_at_recent_high / mean(volume, 20)
+        """
+        high = data["high"]
+        volume = data["volume"]
+        hhv = high.rolling(window=window).max()
+        # 修复 Pandas 2.1+ 中 fillna(method='ffill') 弃用导致的 TypeError
+        vol_at_high = volume.where(high == hhv).ffill(limit=window-1)
+        v_ma = volume.rolling(window=window).mean()
+        return pd.DataFrame({"supply_pressure": vol_at_high / (v_ma + 1e-9)}, index=data.index)
+
+
 class VolatilityFactors:
     @staticmethod
     def bollinger_bands(data, p=20, u=2, d=2):
@@ -438,6 +552,28 @@ class VolatilityFactors:
         tr = pd.concat([(data["high"]-data["low"])/p_close, (data["high"]-p_close).abs()/p_close, (p_close-data["low"]).abs()/p_close], axis=1).max(axis=1)
         return pd.DataFrame({f"atr_{n}": tr.rolling(n, min_periods=1).mean()}, index=data.index)
 
+    @staticmethod
+    def volatility_ratio(data, short_window=5, long_window=20):
+        """
+        波动率收缩比 (Volatility Ratio)
+        逻辑: std(5) / std(20)
+        """
+        ret = data["close"].pct_change()
+        v_short = ret.rolling(window=short_window).std()
+        v_long = ret.rolling(window=long_window).std()
+        return pd.DataFrame({"volatility_ratio": v_short / (v_long + 1e-9)}, index=data.index)
+
+    @staticmethod
+    def amplitude_ratio(data, short_window=5, long_window=20):
+        """
+        振幅收缩比 (Amplitude Ratio)
+        逻辑: mean(high-low, 5) / mean(high-low, 20)
+        """
+        amp = data["high"] - data["low"]
+        a_short = amp.rolling(window=short_window).mean()
+        a_long = amp.rolling(window=long_window).mean()
+        return pd.DataFrame({"amplitude_ratio": a_short / (a_long + 1e-9)}, index=data.index)
+
 class CrowdingFactors:
     @staticmethod
     def high_pos_vol_risk(data, w=120, m=1.5, t=0.9):
@@ -473,4 +609,3 @@ class Alpha101Factors:
     def alpha15(data): return pd.DataFrame({"alpha15": -ts_sum(cs_rank(ts_corr(cs_rank(data["high"]), cs_rank(data["volume"]), 3)), 3)}, index=data.index)
     @staticmethod
     def alpha16(data): return pd.DataFrame({"alpha16": -cs_rank(ts_cov(cs_rank(data["high"]), cs_rank(data["volume"]), 5))}, index=data.index)
-

@@ -235,6 +235,30 @@ class FactorTester:
         plt.savefig(os.path.join(self.fig_path, f'{factor_name}_分组收益.png'), dpi=300)
         plt.close()
 
+    @staticmethod
+    def analyze_factor_direction(factors, returns):
+        """
+        分析因子方向并返回方向调整系数 (1 或 -1)
+        :param factors: pd.DataFrame [FDate, SecCode, FValue] 或 MultiIndex
+        :param returns: pd.Series [FDate, SecCode] 次日收益
+        :return: dict {factor_name: direction}
+        """
+        # 统一格式为 MultiIndex
+        if not isinstance(factors.index, pd.MultiIndex):
+            factors = factors.set_index(['FDate', 'SecCode'])
+            
+        directions = {}
+        for col in factors.columns:
+            combined = pd.concat([factors[col], returns], axis=1).dropna()
+            combined.columns = ['factor', 'ret']
+            
+            if len(combined) > 100:
+                ic = combined.corr(method='spearman').iloc[0, 1]
+                directions[col] = 1 if ic >= 0 else -1
+            else:
+                directions[col] = 1
+        return directions
+
     def preprocess_factors(self, factor_df, method="zscore", winsorize_limit=0.01):
         """
         可选的预处理功能

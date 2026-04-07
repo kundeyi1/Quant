@@ -89,7 +89,7 @@ class DataProvider:
             self.base_path = Path(base_data_path)
             
         self.universe_mgr = UniverseManager(self.base_path)
-        
+
     def _read_raw_file(self, path: Path):
         """
         [Internal] 原子化读取原始文件，处理编码和 Excel 损坏。

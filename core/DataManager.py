@@ -514,6 +514,37 @@ class DataProvider:
             
         return df.set_index(['date', 'code']).sort_index()
 
+    def load_file_data(self, file_path: str):
+        """
+        通用的文件读取函数：读取指定路径的文件并返回 DataFrame。
+        不强制索引名，仅做基础的日期解析和读取。
+        返回: (dataframe, flag)
+        - flag = -1: 成功读取数据
+        - flag = 0: 文件不存在或读取为空
+        """
+        path = Path(file_path)
+        if not path.exists():
+            logger.warning(f"File not found: {path}")
+            return pd.DataFrame(), 0
+        
+        try:
+            # 自动识别格式并读取 (优先处理 CSV，如果有 MultiIndex 会自动识别)
+            if path.suffix.lower() == '.csv':
+                # 尝试读取，不预设 index_col，由调用方处理或保持原始状态
+                df = pd.read_csv(path)
+            elif path.suffix.lower() in ['.xlsx', '.xls']:
+                df = pd.read_excel(path)
+            else:
+                df = pd.DataFrame()
+
+            if df.empty:
+                return pd.DataFrame(), 0
+            
+            return df, -1
+        except Exception as e:
+            logger.error(f"Error loading file {path}: {e}")
+            return pd.DataFrame(), 0
+
 def load_and_preprocess(path, asset_name):
     """
     加载并预处理数据

@@ -19,7 +19,7 @@ class FactorTester:
     因子测试框架
     包括数据加载、收益率计算、回测逻辑、绩效评估
     """
-    def __init__(self, start_date, end_date, output_dir="results/factor"):
+    def __init__(self, start_date, end_date, output_dir="results/factors"):
         self.start_date = pd.to_datetime(start_date)
         self.end_date = pd.to_datetime(end_date)
         self.output_dir = output_dir
@@ -60,108 +60,92 @@ class FactorTester:
 
     def get_forward_returns(self, interval_tag='D'):
         """
-        计算前瞻收益率
+        计算周/月度采样点的前瞻收益率
         """
-
         interval = self.interval_mapping.get(interval_tag, 1)
         
-        # 计算 T 期到 T+interval 期的收益率: (P_{T+interval} / P_T) - 1
-        stock_r_wide = self.prices.shift(-interval) / self.prices - 1
+        # 1. 获取全量的行情收益率
+        stock_r_wide_all = self.prices.shift(-interval) / self.prices - 1
         
-        # 转换成长表格式
+        # 2. 只保留采样点日期 (例如周一), 避免每日重叠计算
+        # 使用 resample 或简单的切片来实现
+        # 这里假设 interval = 5 (周), 20 (月), 1 (日)
+        # 逻辑：从第一天开始，每隔 interval 天取一次采样
+        sample_indices = np.arange(0, len(self.prices), interval)
+        sample_dates = self.prices.index[sample_indices]
+        
+        stock_r_wide = stock_r_wide_all.loc[sample_dates]
+        
+        # 3. 转换成长表格式
         stock_r = stock_r_wide.stack().reset_index()
         stock_r.columns = ['FDate', 'SecCode', 'r']
         return stock_r
 
     def backtest(self, factor_name, factor_data, interval_tag='D', groups=5, if_plot=True):
         """
-        核心回测逻辑 - 对应 FactorTestAPI_new.backtest
+        核心回测逻辑
         :param factor_data: DataFrame 包含 ['FDate', 'SecCode', 'FValue']
         """
         interval = self.interval_mapping.get(interval_tag, 1)
         
-        # 1. 获取收益率数据
         stock_r = self.get_forward_returns(interval_tag)
         
-        # 2. 数据对齐
-        # 统一日期格式
         factor_data['FDate'] = pd.to_datetime(factor_data['FDate'])
         stock_r['FDate'] = pd.to_datetime(stock_r['FDate'])
         
-        # 合并
-        merged_data = factor_data.merge(stock_r, on=['SecCode', 'FDate'], how='inner')
-        merged_data.dropna(subset=['FValue', 'r'], inplace=True)
+        merged_data = factor_data.merge(stock_r, on=['SecCode', 'FDate'], how='right')
+        merged_data.dropna(subset=['FValue'], inplace=True)
         merged_data.sort_values(by=['FDate', 'SecCode'], inplace=True)
-
-        print(f'====== 输出 {factor_name} 因子绩效 ({interval_tag}) ======')
         
-        # 3. 计算 IC 和 Rank IC
-        # 计算截面 Rank (分位数)
         merged_data['FRank'] = merged_data.groupby('FDate')['FValue'].rank(pct=True)
         factor_group = merged_data.groupby('FDate')
 
-        # 计算日度指标
-        daily_stats = factor_group.apply(lambda x: pd.Series({
-            'ic': x['r'].corr(x['FValue'], method='pearson'),
-            'rank_ic': x['r'].corr(x['FRank'], method='spearman')
-        }))
+        ic_series = factor_group.apply(lambda x: x['r'].corr(x['FValue'], method='pearson'))
+        rank_ic_series = factor_group.apply(lambda x: x['r'].corr(x['FRank'], method='spearman'))
         
-        ic_mean = daily_stats['ic'].mean()
-        ic_std = daily_stats['ic'].std()
-        rank_ic_mean = daily_stats['rank_ic'].mean()
-        rank_ic_std = daily_stats['rank_ic'].std()
+        ic_mean = ic_series.mean()
+        ic_std = ic_series.std()
+        rank_ic_mean = rank_ic_series.mean()
+        rank_ic_std = rank_ic_series.std()
         
-        # 年化处理 (假设一年 250 交易日)
         annual_factor = (250 / interval) ** 0.5
         icir = annual_factor * ic_mean / ic_std if ic_std != 0 else 0
         rank_icir = annual_factor * rank_ic_mean / rank_ic_std if rank_ic_std != 0 else 0
 
-        # 4. 分组收益分析
         unique_dates = sorted(merged_data['FDate'].unique())
         factor_group_eval = pd.DataFrame(index=unique_dates)
         
         for i in range(groups):
-            # 逻辑: i/groups <= Rank < (i+1)/groups
-            # 例如 groups=5, i=0 时是 0.0-0.2 (group1), i=4 时是 0.8-1.0 (group5)
             lower = i / groups
             upper = (i + 1) / groups
             group_mask = (merged_data['FRank'] >= lower) & (merged_data['FRank'] <= upper)
             factor_group_eval[f'group{i+1}'] = merged_data.loc[group_mask].groupby('FDate')['r'].mean()
 
-        # 计算净值 (T 期选股后 T+1 期收益开始结算)
-        group_returns = factor_group_eval.shift(1).fillna(0)
-        nav_df = (1 + group_returns).cumprod()
+        factor_group_eval = factor_group_eval.shift(1)
+        nav_df = (1 + factor_group_eval).cumprod().fillna(1.0)
 
-        # 5. 计算衍生指标
-        # 多头组最大回撤
         long_nav = nav_df[f'group{groups}']
         drawdown = long_nav / long_nav.cummax() - 1
         max_drawdown = drawdown.min()
         
-        # 年化收益
-        total_days = (self.end_date - self.start_date).days
-        if total_days > 0:
-            annual_return = long_nav.iloc[-1] ** (250 / (len(nav_df) * interval)) - 1
+        if len(nav_df) > 0:
+            total_periods = len(nav_df)
+            factor_annual_return = long_nav.iloc[-1] ** (1 / (interval * total_periods / 250)) - 1
         else:
-            annual_return = 0
+            factor_annual_return = 0
 
-        # 分组收益中位数
-        group_median_return = group_returns.median()
 
-        # 6. 绘图
         if if_plot:
-            self.plot_group_return_ic(factor_name, nav_df, daily_stats['rank_ic'])
+            self.plot_group_return_ic(factor_name, nav_df, rank_ic_series)
             self.plot_group_return(factor_name, nav_df)
-            # self.plot_group_bar(factor_name, group_median_return)
 
-        # 7. 汇总指标
         eval_metrics = pd.DataFrame({
             'IC': [ic_mean],
             'ICIR': [icir],
             'RankIC': [rank_ic_mean],
             'RankICIR': [rank_icir],
             '多头组最大回撤': [max_drawdown],
-            '多头组年化收益': [annual_return]
+            '多头组年化收益': [factor_annual_return]
         }, index=[factor_name])
 
         return eval_metrics, nav_df

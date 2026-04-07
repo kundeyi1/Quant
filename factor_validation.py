@@ -24,7 +24,7 @@ class FactorValidator:
         self.interval_tag = interval_tag
         
         # 路径配置：增加调仓频率子目录
-        self.factor_save_path = os.path.join(factor_save_path, interval_tag)
+        self.factor_save_path = os.path.join(factor_save_path)
         self.result_save_path = os.path.join(result_save_path, interval_tag)
         os.makedirs(self.factor_save_path, exist_ok=True)
         os.makedirs(self.result_save_path, exist_ok=True)
@@ -65,7 +65,7 @@ class FactorValidator:
                 f_save_filename = os.path.join(self.factor_save_path, f"{name}.csv")
                 f_val.to_csv(f_save_filename)
                 
-                # 3. 创建因子的专属检验文件夹
+                # 3. 创建因子的专属检验结果文件夹
                 factor_report_dir = os.path.join(self.result_save_path, name)
                 os.makedirs(factor_report_dir, exist_ok=True)
                 
@@ -91,11 +91,11 @@ class FactorValidator:
                     factor_name=name, 
                     factor_data=f_data_for_tester, 
                     interval_tag=self.interval_tag, # 使用实例定义的调仓频率
-                    groups=5, 
+                    groups=5,
                     if_plot=True
                 )
                 
-                # --- 新增：持久化保存绩效报告 ---
+                # 保存绩效报告
                 # 将 FactorTester 返回的 metrics (DataFrame) 和 nav_df (DataFrame) 保存为 CSV
                 performance_csv = os.path.join(factor_report_dir, f"{name}_performance_summary.csv")
                 nav_csv = os.path.join(factor_report_dir, f"{name}_group_nav.csv")
@@ -145,22 +145,29 @@ if __name__ == "__main__":
     # 因子定义注册点
     # ---------------------------------------------------------
     factor_definitions = {
-        "Trend_Strength": lambda x: TrendFactors.trend_strength(x),
-        "Trend_Slope": lambda x: TrendFactors.trend_slope(x),
-        "Vol_Dryness": lambda x: VolumeFactors.volume_abs_dryness(x),
-        "Vol_Zscore": lambda x: VolumeFactors.volume_zscore(x),
-        "Pullback_Depth": lambda x: PriceFactors.pullback_depth(x),
-        "Position": lambda x: PriceFactors.position(x),
-        "Accel": lambda x: PriceFactors.momentum_acceleration(x),
-        "Body_Strength": lambda x: PriceFactors.body_strength(x)
+        # 1. 趋势与位置：衡量昨日及之前的结构状态 (Shift 1)
+        "Trend_Slope_Lag1": lambda x: TrendFactors.trend_slope(x).shift(1),
+        "Position_Lag1": lambda x: PriceFactors.position(x).shift(1),
+        "Pullback_Depth_Lag1": lambda x: PriceFactors.pullback_depth(x).shift(1),
+        
+        # 2. 波动压缩类：衡量昨日的收敛程度 (Shift 1)
+        "Volat_Ratio_5_20_Lag1": lambda x: VolatilityFactors.volatility_ratio(x, short_window=5, long_window=20).shift(1),
+        "Volume_Ratio_5_20_Lag1": lambda x: VolumeFactors.volume_ratio(x, short_window=5, long_window=20).shift(1),
+
+        "Volat_Compression_Lag1": lambda x: VolatilityFactors.volatility_compression(x, short_window=5, long_window=20).shift(1),
+
+        # 3. 启动强度：衡量当日的爆发 (不 Shift)
+        "Vol_Explosion_Today": lambda x: VolumeFactors.volume_ratio(x, short_window=1, long_window=5), 
+        "Accel_Today": lambda x: PriceFactors.momentum_acceleration(x),
+        "Body_Strength_Today": lambda x: PriceFactors.body_strength(x)
     }
 
     # ---------------------------------------------------------
     # 设置测试范围并运行
     # ---------------------------------------------------------
     start_date = '2017-01-01'
-    end_date = '2024-12-31'
-    interval = 'D'
+    end_date = '2025-12-31'
+    interval = 'W'
     
     validator = FactorValidator(start_date=start_date, end_date=end_date, interval_tag=interval)
     validator.load_base_data()

@@ -3,7 +3,8 @@ import talib
 import pandas as pd
 from core.NumericalOperators import (
     ts_delay, ts_delta, ts_sum, ts_min, ts_max,
-    ts_std_dev, ts_corr, ts_cov, ts_rank, cs_rank, sign
+    ts_std_dev, ts_corr, ts_cov, ts_rank, cs_rank, sign,
+    FactorOperators
 )
 
 
@@ -80,6 +81,7 @@ class PriceFactors:
         """
         结构位置 (Position)
         逻辑: (close - rolling_min_60) / (rolling_max_60 - rolling_min_60)
+        用60日最高最低价格衡量其处于60日区间的什么位置
         """
         llv = data["low"].rolling(window=window).min()
         hhv = data["high"].rolling(window=window).max()
@@ -89,11 +91,11 @@ class PriceFactors:
     @staticmethod
     def momentum_acceleration(data, window=5):
         """
-        动量加速度 (Momentum Acceleration)
+        当日动量加速度 (Momentum Acceleration)
         逻辑: return_today - mean(return_last_5)
         """
         ret = data["close"].pct_change()
-        mean_ret = ret.rolling(window=window).mean().shift(1) # 排除今日
+        mean_ret = ret.rolling(window=window).mean().shift(1)
         acc = ret - mean_ret
         return pd.DataFrame({"momentum_acceleration": acc}, index=data.index)
 
@@ -129,34 +131,27 @@ class VolumeFactors:
     def volume_abs_dryness(data, window=20):
         """
         绝对缩量程度 (Absolute Volume Dryness)
-        逻辑: Volume / MA(Volume, 2 * T)
+        逻辑: Volume / MA(Volume, T)
         衡量今日成交量相对于长周期均值的比例。值越小代表缩量越极致。
         """
         volume = data["volume"]
-        long_vol_ma = volume.rolling(window=window * 2).mean()
+        long_vol_ma = volume.rolling(window=window).mean()
         dryness_ratio = volume / (long_vol_ma + 1e-9)
         return pd.DataFrame({"volume_abs_dryness": dryness_ratio}, index=data.index)
 
     @staticmethod
-    def volume_ratio(data, short_window=5, long_window=20):
+    def volume_ratio(data, short_window=1, long_window=20):
         """
-        成交量收缩比 (Volume Ratio)
-        逻辑: mean(volume, 5) / mean(volume, 20)
-        """
-        v_short = data["volume"].rolling(window=short_window).mean()
-        v_long = data["volume"].rolling(window=long_window).mean()
-        return pd.DataFrame({"volume_ratio": v_short / (v_long + 1e-9)}, index=data.index)
-
-    @staticmethod
-    def volume_yes_rel_dryness(data, window=5):
-        """
-        相对缩量比例 (Yesterday's Relative Volume Dryness)
-        逻辑: Volume / Volume.shift(1)
-        衡量今日相对于昨日的缩量比例 (例如：0.5 代表缩量一半)
+        量比 (Volume Ratio)
+        逻辑: 过去 short_window 日均量 / 过去 long_window 日均量
+        通过调整参数可以实现：
+        - short=1, long=1: 今日 / 昨日
+        - short=5, long=20: 过去 5 日均量 / 过去 20 日均量 (衡量近期缩量/放量趋势)
         """
         volume = data["volume"]
-        ratio = volume / (volume.shift(1) + 1e-9)
-        return pd.DataFrame({"volume_yes_rel_dryness": ratio}, index=data.index)
+        v_short = volume.rolling(window=short_window).mean()
+        v_long = volume.rolling(window=long_window).mean().shift(short_window)
+        return pd.DataFrame({f"vol_{short_window}d_{long_window}d_ratio": v_short / (v_long + 1e-9)}, index=data.index)
 
     @staticmethod
     def volume_std_bias(data, window=20):
@@ -170,14 +165,6 @@ class VolumeFactors:
         std = volume.rolling(window=window).std()
         v_score = (volume - ma) / (std + 1e-9)
         return pd.DataFrame({"volume_std_score": v_score}, index=data.index)
-
-    @staticmethod
-    def volume_zscore(data, window=20):
-        """
-        成交量 Z-Score (Volume Z-Score)
-        逻辑: 同 volume_std_score，用于 b2_alpha
-        """
-        return VolumeFactors.volume_std_bias(data, window).rename(columns={"volume_std_score": "volume_zscore"})
 
     @staticmethod
     def volume_volatility(data, window=60):
@@ -405,7 +392,6 @@ class TrendFactors:
         """
         华泰 RSRS 正态化因子 (阻力支撑相对强度)
         """
-        from core.NumericalOperators import FactorOperators
         beta = pd.Series(FactorOperators.ts_regression_slope_array(data["low"].values, data["high"].values, N), index=data.index)
         return (beta - beta.rolling(M, min_periods=M//2).mean()) / beta.rolling(M, min_periods=M//2).std()
 
@@ -462,11 +448,13 @@ class TrendFactors:
     def trend_slope(data, window=20):
         """
         趋势斜率 (Trend Slope)
-        逻辑: slope(MA20)
-        计算 MA20 的变动率或线性回归斜率
+        逻辑: 对过去 N 日的均线进行线性回归，提取其斜率 (Slope)
+        相比于单日变动，线性回归斜率更具平滑性和趋势代表性
+        这里定义为20日均线的20日回归斜率
         """
         ma = data["close"].rolling(window=window).mean()
-        slope = (ma - ma.shift(1)) / (ma.shift(1) + 1e-9)
+        # 使用线性回归计算 ma 在 window 周期内的斜率
+        slope = pd.Series(FactorOperators.ts_regression_slope_array(ma.values, np.arange(len(ma)), window), index=data.index)
         return pd.DataFrame({"trend_slope": slope}, index=data.index)
 
     @staticmethod
@@ -514,7 +502,7 @@ class VolatilityFactors:
         return pd.Series((data["close"].values - mid) / (up - low + 1e-9), index=data.index)
 
     @staticmethod
-    def volatility_compression(data, window=20):
+    def volatility_compression(data, short_window=5, long_window=20):
         """
         绝对波动收敛度 (Absolute Volatility Compression)
         逻辑: ATR(5) / ATR(T)
@@ -524,9 +512,9 @@ class VolatilityFactors:
         high, low, close = data["high"], data["low"], data["close"]
         p_close = close.shift(1).replace(0, np.nan)
         tr = pd.concat([(high - low) / p_close, (high - p_close).abs() / p_close, (p_close - low).abs() / p_close], axis=1).max(axis=1)
-        atr_5 = tr.rolling(5).mean()
-        atr_t = tr.rolling(window).mean()
-        compression_ratio = atr_5 / (atr_t + 1e-9)
+        atr_s = tr.rolling(window=short_window).mean()
+        atr_l = tr.rolling(window=long_window).mean()
+        compression_ratio = atr_s / (atr_l + 1e-9)
         return pd.DataFrame({"volatility_compression": compression_ratio}, index=data.index)
 
     @staticmethod

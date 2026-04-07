@@ -7,7 +7,7 @@ from datetime import datetime
 # Import framework components
 from core.DataManager import DataProvider
 from core.FactorTester import FactorTester
-from core.NavAnalyzer import NavAnalyzer
+from core.NavAnalyzer import NavAnalyzer, Visualizer
 from factors.technical_factors import PriceFactors, VolumeFactors, TrendFactors, VolatilityFactors
 
 class B2AlphaResearcher:
@@ -39,24 +39,32 @@ class B2AlphaResearcher:
             print("ERROR: Failed to load data.")
 
     def build_factors(self):
-        """Construct the 12 b2_alpha factors."""
-        print("Calculating b2_alpha factors...")
+        """Construct the 12 b2_alpha factors with staggered timing (Lagged Features)."""
+        print("Calculating b2_alpha factors (Lagged 1d for structural context)...")
         df = self.data.copy()
         
-        # 为了解决 rename 报错，显式提取每一个因子 Dataframe 的第一列为 Series
-        f_strength = TrendFactors.trend_strength(df).iloc[:, 0].rename('trend_strength')
-        f_slope = TrendFactors.trend_slope(df).iloc[:, 0].rename('trend_slope')
-        f_ma_structure = TrendFactors.ma_structure(df).iloc[:, 0].rename('ma_structure')
-        f_supply = TrendFactors.supply_pressure(df).iloc[:, 0].rename('supply_pressure')
+        # 核心逻辑：波动率收敛 (Compression) 和 趋势结构 (Structure) 衡量的是“蓄势”过程
+        # 本地逻辑：所有结构性/波动率类因子均取前一天 (Shift 1) 的结果，避免与今日动量冲突
         
-        f_vol_ratio = VolatilityFactors.volatility_ratio(df).iloc[:, 0].rename('volatility_ratio')
-        f_amp_ratio = VolatilityFactors.amplitude_ratio(df).iloc[:, 0].rename('amplitude_ratio')
+        # 1. Trend & Structure (Lagged 1d)
+        f_strength = TrendFactors.trend_strength(df).iloc[:, 0].shift(1).rename('trend_strength')
+        f_slope = TrendFactors.trend_slope(df).iloc[:, 0].shift(1).rename('trend_slope')
+        f_ma_structure = TrendFactors.ma_structure(df).iloc[:, 0].shift(1).rename('ma_structure')
+        f_supply = TrendFactors.supply_pressure(df).iloc[:, 0].shift(1).rename('supply_pressure')
         
-        f_vol_dryness = VolumeFactors.volume_abs_dryness(df).iloc[:, 0].rename('volume_abs_dryness')
-        f_vol_zscore = VolumeFactors.volume_zscore(df).iloc[:, 0].rename('volume_zscore')
+        # 2. Volatility & Compression (Lagged 1d)
+        f_vol_ratio = VolatilityFactors.volatility_ratio(df).iloc[:, 0].shift(1).rename('volatility_ratio')
+        f_amp_ratio = VolatilityFactors.amplitude_ratio(df).iloc[:, 0].shift(1).rename('amplitude_ratio')
         
-        f_pullback = PriceFactors.pullback_depth(df).iloc[:, 0].rename('pullback_depth')
-        f_pos = PriceFactors.position(df).iloc[:, 0].rename('position')
+        # 3. Volume Characteristics (Lagged 1d)
+        f_vol_dryness = VolumeFactors.volume_abs_dryness(df).iloc[:, 0].shift(1).rename('volume_abs_dryness')
+        f_vol_zscore = VolumeFactors.volume_zscore(df).iloc[:, 0].shift(1).rename('volume_zscore')
+        
+        # 4. Position & Momentum (混合：位置取前一天，动量取今日)
+        f_pullback = PriceFactors.pullback_depth(df).iloc[:, 0].shift(1).rename('pullback_depth')
+        f_pos = PriceFactors.position(df).iloc[:, 0].shift(1).rename('position')
+        
+        # 动量加速度和 K 线强度保留今日 (衡量突破瞬间)
         f_accel = PriceFactors.momentum_acceleration(df).iloc[:, 0].rename('momentum_acceleration')
         f_body = PriceFactors.body_strength(df).iloc[:, 0].rename('body_strength')
         
@@ -163,10 +171,7 @@ class B2AlphaResearcher:
         }).T
         perf_summary.to_csv(os.path.join(output_dir, "b2_alpha_detailed_performance.csv"))
         long_yearly.to_csv(os.path.join(output_dir, "b2_long_yearly_stats.csv"))
-        
-        # 6. 使用 NavAnalyzer 的 Visualizer 绘制专业的绩效图（带回撤阴影）
-        from core.NavAnalyzer import Visualizer
-        
+               
         # 绘制多头净值图
         Visualizer.plot_performance_nav(
             nav_ser=long_analyzer.nav,

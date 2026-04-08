@@ -36,7 +36,7 @@ EXP_CONFIG = {
     "trigger_cols": ["Vol_Explosion_Today", "Accel_Today", "Body_Strength_Today"],
     
     # 测试周期
-    "horizons": ["W"], 
+    "horizons": ["D"], 
     }
 
 # ==============================================================================
@@ -147,10 +147,9 @@ def run_all_combination_experiments():
     # 3. 运行回测循环
     results_summary = []
     for horizon in EXP_CONFIG["horizons"]:
-        horizon_label = "1d" if horizon == "D" else ("5d" if horizon == "W" else "20d")
-        print(f"\n[HORIZON: {horizon_label}] Running synthesis evaluation...")
+        print(f"\n[HORIZON: {horizon}] Running synthesis evaluation...")
         
-        output_base = f"./results/factor_combination/{horizon_label}"
+        output_base = f"./results/factor_combination/{horizon}"
         os.makedirs(output_base, exist_ok=True)
 
         for name, func in methods.items():
@@ -174,7 +173,7 @@ def run_all_combination_experiments():
                 
                 res = metrics.iloc[0].to_dict()
                 res["Method"] = name
-                res["Horizon"] = horizon_label
+                res["Horizon"] = horizon
                 results_summary.append(res)
             except Exception as e:
                 print(f"  FAILED {name} at {horizon}: {e}")

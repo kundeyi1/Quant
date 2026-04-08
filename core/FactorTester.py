@@ -1,3 +1,5 @@
+# 筛选trigger>0.8后检验env_factor的效果
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,7 +25,6 @@ class FactorTester:
         self.start_date = pd.to_datetime(start_date)
         self.end_date = pd.to_datetime(end_date)
         self.output_dir = output_dir
-        self.fig_path = os.path.join(output_dir, "plots")
         os.makedirs(self.fig_path, exist_ok=True)
         
         self.interval_mapping = {'D': 1, 'W': 5, 'M': 20}

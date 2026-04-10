@@ -198,10 +198,7 @@ if __name__ == "__main__":
     DATA_PATH = "D:/DATA/STOCK/all_stock_data_ts_20140102_20251231.csv"
     FACTOR_PATH = "D:/DATA/FACTORS"
     
-    # TRIGGER_COLS = ["Vol_Explosion_Today", "Accel_Today", "Body_Strength_Today"]
-    TRIGGER_COLS = ["Vol_Explosion_Today"]
-    # TRIGGER_COLS = ["Accel_Today"]
-    # TRIGGER_COLS = ["Body_Strength_Today"]
+    TRIGGER_COLS = ["Vol_Explosion_Today", "Accel_Today", "Body_Strength_Today"]
 
     ENV_COLS = [
         "Trend_Slope_Lag1", "Position_Lag1", "Pullback_Depth_Lag1", 

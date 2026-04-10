@@ -1,5 +1,3 @@
-# 筛选trigger>0.8后检验env_factor的效果
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,11 +19,12 @@ class FactorTester:
     因子测试框架
     包括数据加载、收益率计算、回测逻辑、绩效评估
     """
-    def __init__(self, start_date, end_date, output_dir="results/factors"):
+    def __init__(self, start_date, end_date, output_dir="results/factors", factor_name="Factor"):
         self.start_date = pd.to_datetime(start_date)
         self.end_date = pd.to_datetime(end_date)
         self.output_dir = output_dir
-        os.makedirs(self.fig_path, exist_ok=True)
+        # 移除旧的 fig_path 初始化，改为动态生成
+        os.makedirs(self.output_dir, exist_ok=True)
         
         self.interval_mapping = {'D': 1, 'W': 5, 'M': 20}
         self.factors = {}
@@ -36,10 +35,26 @@ class FactorTester:
         从 data_path 加载原始价格数据并进行初步清洗
         """
         print(f"正在从 {data_path} 加载行情数据...")
-        cols = ["date", "code", "close"]
         try:
-            df = pd.read_csv(data_path, usecols=cols)
+            # 预定义需要的列，根据实际文件内容动态调整
+            df = pd.read_csv(data_path)
+            
+            # 检查列是否存在，支持 date/FDate, code/SecCode
+            actual_cols = df.columns.tolist()
+            date_col = "date" if "date" in actual_cols else "FDate"
+            code_col = "code" if "code" in actual_cols else "SecCode"
+            close_col = "close" if "close" in actual_cols else ("Close" if "Close" in actual_cols else None)
+            
+            if not close_col:
+                close_matches = [c for c in actual_cols if 'close' in c.lower()]
+                close_col = close_matches[0] if close_matches else None
+            
+            if not date_col or not code_col or not close_col:
+                raise ValueError(f"列缺失: date={date_col}, code={code_col}, close={close_col}. 现有列: {actual_cols}")
+
+            df = df.rename(columns={date_col: "date", code_col: "code", close_col: "close"})
             df["date"] = pd.to_datetime(df["date"])
+            
             # 时间过滤
             df = df[(df["date"] >= self.start_date) & (df["date"] <= self.end_date)]
             df["code"] = df["code"].astype(str).str.zfill(6)
@@ -50,8 +65,13 @@ class FactorTester:
             # 去重
             df = df.drop_duplicates(subset=["date", "code"])
             
-            # 透视成宽表: Index=Date, Columns=Code, Values=Close
-            self.prices = df.pivot(index="date", columns="code", values="close")
+            # 优化: 只有在数据量较小时使用 pivot，大数据量使用更高效的方式
+            if len(df) > 1000000:
+                print("数据量较大，使用 set_index + unstack 进行透视...")
+                self.prices = df.set_index(["date", "code"])["close"].unstack()
+            else:
+                self.prices = df.pivot(index="date", columns="code", values="close")
+                
             self.prices.index.name = "FDate"
             print(f"行情数据加载完成，涵盖 {len(self.prices)} 个交易日，{len(self.prices.columns)} 只股票")
         except Exception as e:
@@ -122,8 +142,12 @@ class FactorTester:
             group_mask = (merged_data['FRank'] >= lower) & (merged_data['FRank'] <= upper)
             factor_group_eval[f'group{i+1}'] = merged_data.loc[group_mask].groupby('FDate')['r'].mean()
 
-        factor_group_eval = factor_group_eval.shift(1)
-        nav_df = (1 + factor_group_eval).cumprod().fillna(1.0)
+        # 计算各组净值 (处理因子值缺失导致的断档)
+        # 如果某天全市场没有满足条件的成分股，该天的因子组合收益设为0，并在净值计算中通过 ffill 保持前一天水平
+        factor_group_eval = factor_group_eval.shift(1).fillna(0)
+        nav_df = (1 + factor_group_eval).cumprod().ffill()
+        # 对于初始阶段(第一条数据前)进行填充，如果是全量回测起点，默认为1.0
+        nav_df = nav_df.fillna(1.0)
 
         long_nav = nav_df[f'group{groups}']
         drawdown = long_nav / long_nav.cummax() - 1
@@ -137,9 +161,12 @@ class FactorTester:
 
 
         if if_plot:
-            self.plot_group_return_ic(factor_name, nav_df, rank_ic_series)
+            # self.plot_group_return_ic(factor_name, nav_df, rank_ic_series)
             self.plot_group_return(factor_name, nav_df)
-
+            
+            # 时序 IC + 累计 IC
+            self.plot_ic_analysis(factor_name, rank_ic_series, f"{interval_tag} Forward")
+            
         eval_metrics = pd.DataFrame({
             'IC': [ic_mean],
             'ICIR': [icir],
@@ -149,7 +176,7 @@ class FactorTester:
             '多头组年化收益': [factor_annual_return]
         }, index=[factor_name])
 
-        return eval_metrics, nav_df
+        return eval_metrics, nav_df, merged_data
 
     def plot_group_return_ic(self, factor_name, nav_df, daily_rank_ic):
         """
@@ -168,7 +195,8 @@ class FactorTester:
         ax2.set_ylim(-1, 1)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(self.fig_path, f'{factor_name}_净值+因子IC.png'), dpi=300)
+        save_path = os.path.join(self.output_dir, f'{factor_name}_净值+因子IC.png')
+        plt.savefig(save_path, dpi=300)
         plt.close()
 
     def plot_group_return(self, factor_name, nav_df):
@@ -203,10 +231,27 @@ class FactorTester:
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         
-        save_path = os.path.join(self.fig_path, f'{factor_name}_分组累积收益.png')
+        save_path = os.path.join(self.output_dir, f'{factor_name}_分组累积收益.png')
         plt.savefig(save_path, dpi=300)
         plt.close()
         print(f"分组累积收益图已保存至: {save_path}")
+
+    def calculate_hit_rate_table(self, df, groups=10):
+        """
+        分析并返回各分组在每日收益率排名前10%（即90%分位数以上）的概率表格
+        :param df: DataFrame 包含 ['FRank', 'r', 'FDate']
+        :return: pd.DataFrame hit_rate_table
+        """
+        df = df.copy()
+        # 计算每一天收益率的前10%阈值
+        df['is_top_return'] = df.groupby('FDate')['r'].transform(lambda x: x >= x.quantile(0.9) if len(x) > 0 else False)
+        
+        # 分组
+        df['group'] = pd.cut(df['FRank'], bins=np.linspace(0, 1, groups + 1), labels=[f'G{i+1}' for i in range(groups)], include_lowest=True)
+        
+        # 计算每个分组进入收益率前10%的概率
+        hit_rate = df.groupby('group', observed=True)['is_top_return'].mean().to_frame(name='Top10%_Hit_Rate')
+        return hit_rate
 
     def plot_group_bar(self, factor_name, group_median_return):
         """
@@ -217,8 +262,101 @@ class FactorTester:
         ax.set_title(f'{factor_name}: 分组收益 (Median)')
         ax.set_ylabel('Return')
         plt.tight_layout()
-        plt.savefig(os.path.join(self.fig_path, f'{factor_name}_分组收益.png'), dpi=300)
+        save_path = os.path.join(self.output_dir, f'{factor_name}_分组收益.png')
+        plt.savefig(save_path, dpi=300)
         plt.close()
+
+    def plot_return_boxplot(self, factor_name, df, ret_col, groups=5):
+        """
+        绘制不同分组下的未来n个交易日的累计收益率箱线图
+        :param df: DataFrame 包含 ['FRank', ret_col]
+        """
+        plt.figure(figsize=(12, 7))
+        df = df.copy()
+        df['group'] = pd.cut(df['FRank'], bins=np.linspace(0, 1, groups + 1), labels=[f'G{i+1}' for i in range(groups)], include_lowest=True)
+        
+        # 截尾处理 (1%-99%) 以便观察箱线图主要部分
+        lower = df[ret_col].quantile(0.01)
+        upper = df[ret_col].quantile(0.99)
+        df_plot = df[(df[ret_col] >= lower) & (df[ret_col] <= upper)]
+        
+        sns.boxplot(x='group', y=ret_col, data=df_plot, palette='viridis')
+        plt.title(f'{factor_name} - Return Distribution by Group ({ret_col})')
+        plt.xlabel('Factor Group')
+        plt.ylabel('Forward Return')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        save_path = os.path.join(self.output_dir, f'{factor_name}_分组箱线图.png')
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+        print(f"分组收益箱线图已保存至: {save_path}")
+
+    def plot_return_distribution(self, factor_name, df, ret_col):
+        """
+        绘制收益率分布 (针对前10%和后10%分位数)
+        """
+        plt.figure(figsize=(10, 6))
+        
+        # 进行1%-99%截尾 (Winsorize)
+        lower_bound = df[ret_col].quantile(0.01)
+        upper_bound = df[ret_col].quantile(0.99)
+        
+        def trim(x):
+            return x[(x >= lower_bound) & (x <= upper_bound)]
+
+        all_data_trimmed = trim(df[ret_col].dropna())
+        top_10 = df[df["FRank"] >= 0.9][ret_col].dropna()
+        bottom_10 = df[df["FRank"] <= 0.1][ret_col].dropna()
+        
+        top_10_trimmed = trim(top_10)
+        bottom_10_trimmed = trim(bottom_10)
+
+        sns.kdeplot(all_data_trimmed, label="All Data", color="gray", linestyle="--")
+        if not top_10_trimmed.empty:
+            sns.kdeplot(top_10_trimmed, label=f"Top 10% {factor_name}", color="red", lw=2)
+        if not bottom_10_trimmed.empty:
+            sns.kdeplot(bottom_10_trimmed, label=f"Bottom 10% {factor_name}", color="green", lw=2)
+
+        plt.title(f"Return Distribution: {factor_name}")
+        plt.xlabel("Forward Return")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        save_path = os.path.join(self.output_dir, f'{factor_name}_收益分布.png')
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+        print(f"收益分布图已保存至: {save_path}")
+
+    def plot_ic_analysis(self, factor_name, daily_ic, ret_col):
+        """
+        绘制时序 IC 和累计 IC
+        """
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+        
+        # 左轴：累计 IC
+        cum_ic = daily_ic.cumsum()
+        ax1.plot(cum_ic.index, cum_ic, color="tab:blue", label="Cumulative IC")
+        ax1.set_ylabel("Cumulative IC", color="tab:blue")
+        ax1.tick_params(axis='y', labelcolor="tab:blue")
+        
+        # 右轴：20日滚动 IC
+        ax2 = ax1.twinx()
+        rolling_ic = daily_ic.rolling(20).mean()
+        ax2.bar(daily_ic.index, daily_ic, color="tab:gray", alpha=0.5, label="Single-Period IC")
+        ax2.plot(rolling_ic.index, rolling_ic, color="tab:red", alpha=0.8, label="20-Period Rolling Mean")
+        ax2.set_ylabel("Single-Period/20-Period Rolling IC", color="tab:red")
+        ax2.tick_params(axis='y', labelcolor="tab:red")
+        ax2.axhline(0, color='black', linestyle='--', linewidth=0.8)
+        
+        plt.title(f"Factor IC Analysis: {factor_name}")
+        fig.tight_layout()
+        
+        save_path = os.path.join(self.output_dir, f'{factor_name}_IC分析.png')
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+        print(f"IC分析图已保存至: {save_path}")
 
     @staticmethod
     def analyze_factor_direction(factors, returns):

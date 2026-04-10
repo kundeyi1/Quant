@@ -110,6 +110,30 @@ class PriceFactors:
         strength = body / (range_hl + 1e-9)
         return pd.DataFrame({"body_strength": strength}, index=data.index)
 
+    @staticmethod
+    def kdj(data, n=9, m1=3, m2=3):
+        """
+        KDJ 指标
+        逻辑: 
+        RSV = (Close - LLV(Low, N)) / (HHV(High, N) - LLV(Low, N)) * 100
+        K = EMA(RSV, M1), D = EMA(K, M2), J = 3*K - 2*D
+        """
+        high = data["high"]
+        low = data["low"]
+        close = data["close"]
+        
+        low_n = low.rolling(window=n).min()
+        high_n = high.rolling(window=n).max()
+        
+        rsv = (close - low_n) / (high_n - low_n + 1e-9) * 100
+        
+        # 严格按照国内常用的 KDJ 指数平滑算法 (通常是 ewm)
+        k = rsv.ewm(com=m1-1, adjust=False).mean()
+        d = k.ewm(com=m2-1, adjust=False).mean()
+        j = 3 * k - 2 * d
+        
+        return pd.DataFrame({"kdj_k": k, "kdj_d": d, "kdj_j": j}, index=data.index)
+
 
 class VolumeFactors:
     """
@@ -152,6 +176,23 @@ class VolumeFactors:
         v_short = volume.rolling(window=short_window).mean()
         v_long = volume.rolling(window=long_window).mean().shift(short_window)
         return pd.DataFrame({f"vol_{short_window}d_{long_window}d_ratio": v_short / (v_long + 1e-9)}, index=data.index)
+
+    @staticmethod
+    def directional_volume_ratio(data, short_window=1, long_window=20):
+        """
+        带方向的量比 (Directional Volume Ratio)
+        逻辑: (V_short / V_long) * sign(Close - Previous_Close)
+        上涨放量为正，下跌放量为负。用于区分攻击性放量与恐慌性抛盘。
+        """
+        volume = data["volume"]
+        close = data["close"]
+        v_short = volume.rolling(window=short_window).mean()
+        v_long = volume.rolling(window=long_window).mean().shift(short_window)
+        ratio = v_short / (v_long + 1e-9)
+        
+        # 获取涨跌方向
+        direction = np.sign(close.diff().fillna(0))
+        return pd.DataFrame({"directional_volume_ratio": ratio * direction}, index=data.index)
 
     @staticmethod
     def volume_std_bias(data, window=20):
@@ -225,6 +266,18 @@ class VolumeFactors:
         strength = strength.replace([np.inf, -np.inf], np.nan)
         
         return pd.DataFrame({"intraday_strength": strength}, index=data.index)
+
+    @staticmethod
+    def pv_consistency(data, window=20):
+        """
+        量价一致性 (Price-Volume Consistency)
+        逻辑: N日内量价秩相关系数 (Spearman Rank Correlation)
+        衡量价格变化与成交量变动是否正向一致。
+        """
+        ret = data["close"].pct_change()
+        vol_change = data["volume"].pct_change()
+        corr = ret.rolling(window=window * 2).corr(vol_change)
+        return pd.DataFrame({"pv_consistency": corr}, index=data.index)
 
 
 class TrendFactors:
@@ -482,6 +535,50 @@ class TrendFactors:
         v_ma = volume.rolling(window=window).mean()
         return pd.DataFrame({"supply_pressure": vol_at_high / (v_ma + 1e-9)}, index=data.index)
 
+    @staticmethod
+    def displacement_ratio(data, window=5):
+        """
+        位移路程比 (Displacement to Distance Ratio / Efficiency Ratio)
+        逻辑: (Close - Close[N]) / Sum(Abs(Close - Close[1]), N)
+        衡量趋势的效率，1代表直线运动，0代表无位移。
+        """
+        close = data["close"]
+        displacement = close - close.shift(window)
+        total_distance = (close - close.shift(1)).abs().rolling(window=window).sum()
+        return pd.DataFrame({"displacement_ratio": displacement / (total_distance + 1e-9)}, index=data.index)
+
+    @staticmethod
+    def bullish_alignment_ratio(data, windows=[5, 10, 20, 60, 120], lookback=20):
+        """
+        多头排列得分 (Bullish MA Alignment Score)
+        逻辑: 类似 PMI 定义，不再是 0/1 判定，而是根据均线排列情况给出连续得分。
+        计算每一天满足 MA_i > MA_{i+1} 的组合数量占比。
+        例如 5 条均线有 4 个邻位关系，若全部满足则为 1.0，满足 3 个则为 0.75。
+        """
+        close = data["close"]
+        # 计算各周期均线
+        mas = [close.rolling(window=w, min_periods=min(w, 10)).mean() for w in windows]
+        
+        # 计算每一对邻近均线的得分 (MA_short > MA_long)
+        alignment_scores = []
+        for i in range(len(mas) - 1):
+            # 满足条件为 1, 不满足为 0, 缺失值为 NaN
+            score = (mas[i] > mas[i+1]).astype(float)
+            # 只有当两根均线都有值时才计入
+            score.loc[mas[i].isna() | mas[i+1].isna()] = np.nan
+            alignment_scores.append(score)
+            
+        # 计算当日综合得分 (0.0 - 1.0)
+        daily_score = pd.concat(alignment_scores, axis=1).mean(axis=1)
+        
+        # 对得分进行平滑 (lookback 周期均值)
+        ratio = daily_score.rolling(window=lookback, min_periods=1).mean()
+        
+        # 填充 NaN 并添加极小扰动以确保 qcut 稳定性
+        ratio = ratio.fillna(0) + np.random.normal(0, 1e-9, len(ratio))
+        
+        return pd.DataFrame({"bullish_alignment_ratio": ratio}, index=data.index)
+
 
 class VolatilityFactors:
     @staticmethod
@@ -505,7 +602,7 @@ class VolatilityFactors:
     def volatility_compression(data, short_window=5, long_window=20):
         """
         绝对波动收敛度 (Absolute Volatility Compression)
-        逻辑: ATR(5) / ATR(T)
+        逻辑: ATR(S) / ATR(L)
         衡量短期波动相对于中期波动的比例。
         物理意义: 值越小代表波动越极端收敛。
         """
